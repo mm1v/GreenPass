@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import re
+import zipfile
 
 FILES_TO_MERGE = [
     "src/01_foundation.py",
@@ -16,11 +17,13 @@ FILES_TO_MERGE = [
     "src/10_webproxy.py",
 ]
 
-OUTPUT_FILE = "GreenPass.plugin"
+OUTPUT_PLUGIN = "GreenPass.plugin"
+OUTPUT_ELYX = "GreenPass.elyx"
 
 def build():
     print("Starting build...")
     output_content = []
+    version_str = "2.5.7f"
 
     for file_path in FILES_TO_MERGE:
         if not os.path.exists(file_path):
@@ -48,7 +51,9 @@ def build():
                 if match:
                     orig_version = match.group(1)
                     if not orig_version.endswith('f'):
-                        line = f'__version__ = "{orig_version}f"\n'
+                        orig_version = f"{orig_version}f"
+                    line = f'__version__ = "{orig_version}"\n'
+                    version_str = orig_version
             elif stripped.startswith("GREENPASS_UPDATE_URL ="):
                 line = 'GREENPASS_UPDATE_URL = ""\n'
             elif stripped.startswith("GREENPASS_ELYX_UPDATE_URL ="):
@@ -58,26 +63,46 @@ def build():
             
         output_content.extend(cleaned_lines)
 
-    # Write output files
-    for target in ("GreenPass.plugin", "GreenPass_new.plugin"):
-        with open(target, "w", encoding="utf-8") as out:
-            out.write("".join(output_content))
-        print(f"Successfully generated {target}")
+    compiled_code = "".join(output_content)
 
-    # Verify syntax
+    # 1. Write standalone GreenPass.plugin
+    with open(OUTPUT_PLUGIN, "w", encoding="utf-8") as out:
+        out.write(compiled_code)
+    print(f"Successfully generated {OUTPUT_PLUGIN}")
+
+    # 2. Write packaged GreenPass.elyx
+    refmap_content = "metainfo: plugin/meta.yml\nmain: plugin/main.py\nelyxbuilder: plugin/.elyxbuilder\n"
+    meta_content = (
+        'name: GreenPass\n'
+        'description: "Практически универсальный прокси-плагин для exteraGram"\n'
+        'id: GreenPass\n'
+        f'version: "{version_str}"\n'
+        'author: "@mm1vs"\n'
+        'app_version: ">=12.1.1"\n'
+        'icon: monek_icons/0\n'
+    )
+    elyx_config = "zipFormat: eaf\nsource: plugin\n"
+
+    with zipfile.ZipFile(OUTPUT_ELYX, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("refmap.yml", refmap_content)
+        z.writestr("plugin/meta.yml", meta_content)
+        z.writestr("plugin/main.py", compiled_code)
+        z.writestr("plugin/.elyxbuilder/config.yml", elyx_config)
+    print(f"Successfully generated {OUTPUT_ELYX}")
+
+    # 3. Verify syntax
     print("Verifying syntax...")
-    for target in ("GreenPass.plugin", "GreenPass_new.plugin"):
-        try:
-            result = subprocess.run([sys.executable, "-m", "py_compile", target], 
-                                    capture_output=True, text=True)
-            if result.returncode == 0:
-                print(f"Syntax check passed for {target}!")
-            else:
-                print(f"Syntax check failed for {target}!")
-                print(result.stderr)
-                sys.exit(1)
-        except Exception as e:
-            print(f"Could not run syntax check for {target}: {e}")
+    try:
+        result = subprocess.run([sys.executable, "-m", "py_compile", OUTPUT_PLUGIN], 
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"Syntax check passed for {OUTPUT_PLUGIN}!")
+        else:
+            print(f"Syntax check failed for {OUTPUT_PLUGIN}!")
+            print(result.stderr)
+            sys.exit(1)
+    except Exception as e:
+        print(f"Could not run syntax check for {OUTPUT_PLUGIN}: {e}")
 
 if __name__ == "__main__":
     build()
