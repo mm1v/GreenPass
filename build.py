@@ -23,7 +23,7 @@ OUTPUT_ELYX = "GreenPass.elyx"
 def build():
     print("Starting build...")
     output_content = []
-    version_str = "2.5.7f"
+    version_str = "2.5.7"
 
     for file_path in FILES_TO_MERGE:
         if not os.path.exists(file_path):
@@ -50,8 +50,6 @@ def build():
                 match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', line)
                 if match:
                     orig_version = match.group(1)
-                    if not orig_version.endswith('f'):
-                        orig_version = f"{orig_version}f"
                     line = f'__version__ = "{orig_version}"\n'
                     version_str = orig_version
             elif stripped.startswith("GREENPASS_UPDATE_URL ="):
