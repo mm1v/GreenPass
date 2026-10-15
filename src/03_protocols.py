@@ -1799,10 +1799,10 @@ def _build_singbox_awg_config(conf_text, local_port):
         port = int(port_text)
         public_key = str(peer.get("publickey", "") or "").strip()
         allowed = [_prefix(item) for item in str(peer.get("allowedips", "") or "").split(",") if item.strip()]
-        if not any(item == "0.0.0.0/0" for item in allowed):
-            allowed.append("0.0.0.0/0")
-        if has_ipv6 and not any(item in ("::/0", "::0/0") for item in allowed):
-            allowed.append("::/0")
+        if not allowed:
+            allowed = ["0.0.0.0/0"]
+            if has_ipv6:
+                allowed.append("::/0")
         if not host or not (1 <= port <= 65535) or not public_key or not allowed:
             raise ValueError("AWG peer requires Endpoint, PublicKey and AllowedIPs")
         item = {
@@ -1822,6 +1822,7 @@ def _build_singbox_awg_config(conf_text, local_port):
     endpoint = {
         "type": "wireguard",
         "tag": "awg-out",
+        "detour": "direct",
         "address": addresses,
         "private_key": private_key,
         "peers": sb_peers,
@@ -1837,6 +1838,24 @@ def _build_singbox_awg_config(conf_text, local_port):
     if awg:
         endpoint["amnezia"] = awg
 
+    route_rules = [{"action": "sniff"}]
+    peer_addresses = [p["address"] for p in sb_peers if p.get("address")]
+    peer_ipv4 = [f"{ip}/32" for ip in peer_addresses if ":" not in ip and not any(c.isalpha() for c in ip)]
+    if peer_ipv4:
+        route_rules.append({"ip_cidr": peer_ipv4, "outbound": "direct"})
+    peer_ipv6 = [f"{ip}/128" for ip in peer_addresses if ":" in ip and not any(c.isalpha() for c in ip)]
+    if peer_ipv6:
+        route_rules.append({"ip_cidr": peer_ipv6, "outbound": "direct"})
+    peer_domains = [ip for ip in peer_addresses if any(c.isalpha() for c in ip)]
+    if peer_domains:
+        route_rules.append({"domain": peer_domains, "outbound": "direct"})
+
+    dns_list = [item.strip() for item in str(interface.get("dns", "") or "").split(",") if item.strip()]
+    dns_servers = [
+        {"type": "udp", "tag": "dns-direct", "server": "1.1.1.1", "detour": "direct"},
+        {"type": "udp", "tag": "dns-google", "server": "8.8.8.8", "detour": "direct"},
+    ]
+
     config = {
         "log": {"disabled": False, "level": "info"},
         "inbounds": [{
@@ -1847,40 +1866,28 @@ def _build_singbox_awg_config(conf_text, local_port):
         }],
         "outbounds": [
             {"type": "direct", "tag": "direct"},
-            {"type": "block", "tag": "block"},
         ],
         "endpoints": [endpoint],
         "route": {
+            "rules": route_rules,
             "final": "awg-out",
+            "default_domain_resolver": "dns-direct",
         },
     }
 
-    route_rules = []
-    if not has_ipv6:
-        route_rules.append({"ip_version": 6, "outbound": "block"})
-    if route_rules:
-        config["route"]["rules"] = route_rules
-
-    dns_list = [item.strip() for item in str(interface.get("dns", "") or "").split(",") if item.strip()]
-    dns_servers = [
-        {"type": "udp", "tag": "dns-cf", "server": "1.1.1.1"},
-        {"type": "udp", "tag": "dns-google", "server": "8.8.8.8"},
-    ]
     if dns_list:
-        dns_servers.insert(0, {"type": "udp", "tag": "awg-dns", "server": dns_list[0]})
+        dns_servers.insert(0, {"type": "udp", "tag": "awg-dns", "server": dns_list[0], "detour": "awg-out"})
         config["dns"] = {
             "servers": dns_servers,
             "final": "awg-dns",
-            "strategy": "ipv4_only" if not has_ipv6 else "prefer_ipv4",
+            "strategy": "prefer_ipv4",
         }
-        config["route"]["default_domain_resolver"] = "dns-cf"
     else:
         config["dns"] = {
             "servers": dns_servers,
-            "final": "dns-cf",
-            "strategy": "ipv4_only" if not has_ipv6 else "prefer_ipv4",
+            "final": "dns-direct",
+            "strategy": "prefer_ipv4",
         }
-        config["route"]["default_domain_resolver"] = "dns-cf"
 
     return json.dumps(config)
 
