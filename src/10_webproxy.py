@@ -1,0 +1,3007 @@
+# --- optional bundled from greenpass.tgws_cf_h2.py ---
+try:
+    # HTTP/2 media transport adapted from Flowseal/tg-ws-proxy v1.11.1.
+    # Copyright (c) 2026 Flowseal. Licensed under the MIT License:
+    # Permission is hereby granted, free of charge, to any person obtaining a copy
+    # of this software and associated documentation files (the "Software"), to deal
+    # in the Software without restriction, including without limitation the rights
+    # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    # copies of the Software, and to permit persons to whom the Software is
+    # furnished to do so, subject to the following conditions:
+    # The above copyright notice and this permission notice shall be included in
+    # all copies or substantial portions of the Software.
+    # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    # AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    # THE SOFTWARE.
+    import asyncio
+    import logging
+    import os
+    import ssl
+    import struct
+    import time
+    from collections import deque
+    from dataclasses import dataclass, field
+    from typing import Dict, List, Optional, Set, Tuple
+
+    import certifi
+    import httpx
+    from h2.config import H2Configuration
+    from h2.connection import H2Connection
+    from h2.errors import ErrorCodes
+    from h2.events import (
+        ConnectionTerminated, DataReceived, RemoteSettingsChanged,
+        ResponseReceived, StreamEnded, StreamReset, WindowUpdated,
+    )
+    from h2.exceptions import H2Error, StreamClosedError
+    from h2.settings import SettingCodes, Settings
+
+    log = logging.getLogger('tg-mtproto-proxy')
+    MAX_PACKET = 4 * 1024 * 1024
+    MAX_CHANNEL_REQUESTS = 8
+    MAX_CHANNEL_BYTES = 8 * 1024 * 1024
+    MAX_LANE_REQUESTS = 64
+    MAX_LANE_BYTES = 32 * 1024 * 1024
+    MAX_LANE_REPLY_BYTES = 32 * 1024 * 1024
+    DOMAIN_COOLDOWN = 30.0
+    REQUEST_TIMEOUT = 65.0
+    SETUP_TIMEOUT = 8.0
+    REPLAY_IDLE_SECONDS = 1.0
+    REPLAY_REQUEST_SECONDS = 3.0
+    REPLAY_CHECK_SECONDS = 0.25
+    REPLAY_MAX_AGE = 30.0
+    REPLAY_HISTORY_BYTES = 64 * 1024
+    REPLAY_HISTORY_PACKETS = 16
+    MAX_CHANNEL_REPLAYS = 2
+    REPLAY_SLOT_SECONDS = 30.0
+    REPLAY_RETRY_SECONDS = 2.0
+    REPLAY_MAX_ATTEMPTS = 3
+    SLOW_RESPONSE_SECONDS = 3.0
+    DIAGNOSTIC_INTERVAL = 5.0
+
+
+    @dataclass
+    class _RequestTrace:
+        packet: int
+        started: float
+        replay: bool
+        size: int
+        request: int = 0
+        stream: int = 0
+        phase: str = 'queued'
+        sent_at: Optional[float] = None
+        headers_at: Optional[float] = None
+        finished_at: Optional[float] = None
+        received: int = 0
+        cf_ray: str = '-'
+
+        def summary(self, now: float) -> str:
+            end = self.finished_at if self.finished_at is not None else now
+            headers = self.headers_at if self.headers_at is not None else end
+            send_ms = -1 if self.sent_at is None else (self.sent_at - self.started) * 1000
+            headers_ms = -1 if self.sent_at is None else max(0, headers - self.sent_at) * 1000
+            return ('req=%d pkt=%d sid=%d replay=%d phase=%s age_ms=%.0f '
+                    'send_ms=%.0f wait_headers_ms=%.0f up=%d down=%d ray=%s' % (
+                        self.request, self.packet, self.stream, self.replay, self.phase,
+                        (end - self.started) * 1000,
+                        send_ms, headers_ms,
+                        self.size, self.received, self.cf_ray))
+
+
+    class _NativeDeliveryError(ConnectionError):
+        """The local receiver disconnected"""
+
+
+    class _ReplyBufferFull(BufferError):
+        """A local memory limit"""
+
+
+    class _MTProtoTransportError(Exception):
+        """An endpoint error that the native client must receive, not just EOF."""
+
+        def __init__(self, code: int, source: str):
+            super().__init__('%d (%s)' % (code, source))
+            self.code = code
+
+
+    @dataclass
+    class _ReplayPacket:
+        sent_at: float
+        body: bytes
+        sequence: int
+        attempts: int = 0
+        last_attempt_at: float = 0.0
+        pending: Optional[asyncio.Task] = None
+        originals: Set[asyncio.Task] = field(default_factory=set, repr=False)
+        retired: bool = False
+
+        @property
+        def replayed(self) -> bool:
+            return self.attempts > 0
+
+
+    async def _read_packet(reader, decryptor, tag: bytes) -> Tuple[bytes, bool]:
+        async def plaintext(count: int) -> bytes:
+            return decryptor.update(await reader.readexactly(count))
+
+        if tag == PROTO_TAG_ABRIDGED:
+            first = (await plaintext(1))[0]
+            quick, words = bool(first & 0x80), first & 0x7f
+            if words == 0x7f:
+                words = int.from_bytes(await plaintext(3), 'little')
+            length = words * 4
+        else:
+            value, = struct.unpack('<I', await plaintext(4))
+            quick, length = bool(value & 0x80000000), value & 0x7fffffff
+        if not 24 <= length <= MAX_PACKET + (15 if tag == PROTO_TAG_SECURE else 0):
+            raise ValueError('native packet length outside supported range: %d' % length)
+        body = await plaintext(length)
+        if tag == PROTO_TAG_SECURE:
+            if body[:8] == b'\x00' * 8:
+                packet_length = 20 + int.from_bytes(body[16:20], 'little')
+            else:
+                packet_length = 24 + ((length - 24) // 16) * 16
+            if not 24 <= packet_length <= length or length - packet_length > 15:
+                raise ValueError('invalid padded native packet')
+            body = body[:packet_length]
+        if len(body) % 4 or len(body) > MAX_PACKET:
+            raise ValueError('invalid native packet alignment or size')
+        return body, quick
+
+
+    def _encode_reply(body: bytes, tag: bytes) -> bytes:
+        if not body or len(body) % 4 or len(body) > MAX_PACKET:
+            raise ValueError('invalid HTTP MTProto response length: %d' % len(body))
+        if tag == PROTO_TAG_ABRIDGED:
+            words = len(body) // 4
+            prefix = bytes([words]) if words < 0x7f else b'\x7f' + words.to_bytes(3, 'little')
+            return prefix + body
+        padding = os.urandom(os.urandom(1)[0] % 4) if tag == PROTO_TAG_SECURE else b''
+        return struct.pack('<I', len(body) + len(padding)) + body + padding
+
+
+    class _HttpChannel:
+        def __init__(self, lane, channel_id: int, label: str):
+            self.lane, self.channel_id, self.label = lane, channel_id, label
+            self.closed = False
+            self.transport_error: Optional[int] = None
+            self.pending: Dict[asyncio.Task, int] = {}
+            self.pending_since: Dict[asyncio.Task, float] = {}
+            self.sent_since: Dict[asyncio.Task, float] = {}
+            self.pending_bytes = 0
+            self.reply_bytes = 0
+            self.queue = asyncio.Queue(maxsize=16)
+            self.capacity = asyncio.Condition()
+            self.recovery_wakeup = asyncio.Event()
+            self.requests = self.up = self.down = self.quick_requests = 0
+            self.started = time.monotonic()
+            self.receiving_tasks: Set[asyncio.Task] = set()
+            self.delivering_since: Optional[float] = None
+            self.replay_pending: Set[asyncio.Task] = set()
+            self.replay_history: List[_ReplayPacket] = []
+            self.replay_key: Optional[bytes] = None
+            self.replay_requests = 0
+            self.poll_requests = 0
+            self.first_poll_gap = 0.0
+            self.replay_rotations = 0
+            self.capacity_rotations = 0
+            self.last_progress = self.started
+            self.last_native_send = self.started
+            self.close_lock = asyncio.Lock()
+            self.send_lock = asyncio.Lock()
+            self.close_done = False
+            self.request_traces: Dict[asyncio.Task, _RequestTrace] = {}
+            self.recent_traces = deque(maxlen=16)
+            self.upload_wait_since: Optional[float] = None
+            self.upload_wait_phase = '-'
+            self.upload_wait_bytes = 0
+            self.http_bytes = self.small_responses = self.large_responses = 0
+            self.flow_sample = (self.started, 0, 0, 0, 0, 0, 0, 0)
+            lane.channels.add(self)
+
+        @property
+        def receiving_http(self) -> int:
+            return len(self.receiving_tasks)
+
+        @property
+        def native_backpressure(self) -> bool:
+            return bool(self.reply_bytes) or self.delivering_since is not None
+
+        def _has_capacity(self, length: int) -> bool:
+            return len(self.pending) < MAX_CHANNEL_REQUESTS and self.pending_bytes + length <= MAX_CHANNEL_BYTES
+
+        def _wake_receiver(self) -> None:
+            if not self.closed and not self.pending and not self.native_backpressure:
+                self.recovery_wakeup.set()
+
+        def _overdue_original(self, entry: _ReplayPacket, now: float) -> bool:
+            return entry.retired or any(task in self.sent_since and task not in self.receiving_tasks
+                       and now - self.sent_since[task] >= REPLAY_REQUEST_SECONDS
+                       for task in entry.originals)
+
+        def _replay_limit(self, entry: _ReplayPacket) -> int:
+            return REPLAY_MAX_ATTEMPTS if entry.originals or entry.retired or entry is self.replay_history[-1] else 0
+
+        def _capacity_candidate(self, now: float):
+            for task, sent in sorted(self.sent_since.items(), key=lambda pair: (
+                    pair[0] not in self.replay_pending, pair[1])):
+                if (task.done() or task in self.receiving_tasks
+                        or now - sent < REPLAY_REQUEST_SECONDS):
+                    continue
+                if task in self.replay_pending:
+                    return task, None
+                entry = next((entry for entry in self.replay_history if task in entry.originals), None)
+                if entry is not None and now - entry.sent_at <= REPLAY_MAX_AGE:
+                    return task, entry
+            return None
+
+        async def _make_upload_room(self, now: float) -> None:
+            if self.closed or self.upload_wait_since is None:
+                return
+            if self.upload_wait_phase == 'channel-capacity':
+                if self._has_capacity(self.upload_wait_bytes):
+                    return
+                channels = [self]
+            elif self.upload_wait_phase == 'lane-capacity':
+                if self.lane._has_capacity(self.upload_wait_bytes):
+                    return
+                channels = sorted(self.lane.channels, key=lambda channel: min(
+                    channel.sent_since.values(), default=now))
+            else:
+                return
+            for channel in channels:
+                candidate = channel._capacity_candidate(now)
+                if candidate is None:
+                    continue
+                task, entry = candidate
+                channel.sent_since.pop(task, None)
+                if entry is not None:
+                    entry.retired = True
+                trace = channel.request_traces.get(task)
+                if trace is not None:
+                    trace.phase = 'capacity-' + trace.phase
+                if now >= self.lane.next_capacity_log:
+                    self.lane.next_capacity_log = now + DIAGNOSTIC_INTERVAL
+                    log.debug('H2 CAPACITY lane=%d waiting_channel=%d release_channel=%d '
+                              'reason=%s replay=%d wait_ms=%.0f inflight=%d',
+                              self.lane.lane_id, self.channel_id, channel.channel_id,
+                              self.upload_wait_phase, task in channel.replay_pending,
+                              (now - self.upload_wait_since) * 1000, self.lane.inflight)
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                channel.capacity_rotations += 1
+                self.lane.capacity_rotations += 1
+                return
+
+        def _replay_blocker(self, entry: _ReplayPacket, now: float) -> Optional[str]:
+            if not 0 <= now - entry.sent_at <= REPLAY_MAX_AGE:
+                return 'expired'
+            if entry.attempts >= self._replay_limit(entry):
+                return 'budget-used'
+            if self.native_backpressure:
+                return 'native-backpressure'
+            if entry.originals.intersection(self.receiving_tasks):
+                return 'original-body'
+            if entry.pending in self.receiving_tasks:
+                return 'replay-body'
+            if entry.replayed and now - entry.last_attempt_at < REPLAY_RETRY_SECONDS:
+                return 'backoff-or-progress'
+            if self._overdue_original(entry, now):
+                return None
+            if (entry is not self.replay_history[-1]
+                    or any(task is not entry.pending for task in self.pending)):
+                return 'receiver-active'
+            if entry.replayed and now - self.last_progress < REPLAY_IDLE_SECONDS:
+                return 'backoff-or-progress'
+            return None
+
+        def _replay_due(self, entry: _ReplayPacket, now: float) -> bool:
+            return self._replay_blocker(entry, now) is None
+
+        def _wait_state(self, now: float) -> str:
+            oldest = min(self.pending_since.values(), default=now)
+            recovery_left = sum(max(0, self._replay_limit(entry) - entry.attempts)
+                                for entry in self.replay_history if now - entry.sent_at <= REPLAY_MAX_AGE)
+            waiting_headers = sum(task not in self.replay_pending and task not in self.receiving_tasks
+                                  and now - since >= REPLAY_REQUEST_SECONDS
+                                  for task, since in self.pending_since.items())
+            return ('channel=%d pending=%d replays=%d receiving=%d ready_bytes=%d '
+                    'native_write=%d idle_ms=%.0f oldest_ms=%.0f native_age_ms=%.0f '
+                    'recovery_left=%d waiting_headers=%d' % (
+                        self.channel_id, len(self.pending), len(self.replay_pending),
+                        self.receiving_http, self.reply_bytes, self.delivering_since is not None,
+                        (now - self.last_progress) * 1000, (now - oldest) * 1000,
+                        (now - self.last_native_send) * 1000, recovery_left, waiting_headers))
+
+        def _request_detail(self, trace: _RequestTrace, now: float) -> str:
+            entry = next((entry for entry in self.replay_history if entry.sequence == trace.packet), None)
+            recovery = 'not-retained'
+            attempts = '-'
+            if entry is not None:
+                attempts = '%d/%d' % (entry.attempts, self._replay_limit(entry))
+                blocker = self._replay_blocker(entry, now)
+                if blocker is not None:
+                    recovery = blocker
+                elif entry.pending is not None:
+                    recovery = ('replay-body' if entry.pending in self.receiving_tasks else
+                                'probe-%.0fms' % ((now - self.pending_since.get(entry.pending, now)) * 1000))
+                elif len(self.replay_pending) >= MAX_CHANNEL_REPLAYS:
+                    recovery = 'replay-slots'
+                elif not self._has_capacity(len(entry.body)):
+                    recovery = 'channel-capacity'
+                elif not self.lane._has_capacity(len(entry.body)):
+                    recovery = 'lane-capacity'
+                elif self.send_lock.locked():
+                    recovery = 'send-lock'
+                else:
+                    recovery = 'eligible'
+            related = [item for item in self.recent_traces if item.packet == trace.packet][-2:]
+            return ('channel=%d %s attempts=%s recovery=%s recent=[%s]' % (
+                self.channel_id, trace.summary(now), attempts, recovery,
+                '; '.join(item.summary(now) for item in related)))
+
+        def _flow_state(self, now: float) -> str:
+            previous = self.flow_sample
+            current = (now, self.requests, self.replay_requests, self.http_bytes,
+                       self.down, self.small_responses, self.large_responses, self.poll_requests)
+            self.flow_sample = current
+            poll_gap, self.first_poll_gap = self.first_poll_gap, 0.0
+            probes = [trace.summary(now) for trace in self.request_traces.values() if trace.replay][:2]
+            return ('channel=%d window_ms=%.0f requests=%d replays=%d http_down=%d native_down=%d '
+                    'small=%d large=%d pending=%d ready=%d upload_wait=%s/%.0fms native_write_ms=%.0f '
+                    'capacity_rotations=%d polls=%d first_poll_ms=%.0f probes=[%s]' % (
+                        self.channel_id, (now - previous[0]) * 1000,
+                        *(current[index] - previous[index] for index in range(1, 7)),
+                        len(self.pending), self.reply_bytes, self.upload_wait_phase,
+                        0 if self.upload_wait_since is None else (now - self.upload_wait_since) * 1000,
+                        0 if self.delivering_since is None else (now - self.delivering_since) * 1000,
+                        self.capacity_rotations,
+                        current[7] - previous[7], poll_gap * 1000,
+                        '; '.join(probes)))
+
+        def _fail(self, error: Exception) -> None:
+            if self.closed:
+                return
+            if isinstance(error, _MTProtoTransportError):
+                self.transport_error = error.code
+            self.closed = True
+            self.recovery_wakeup.set()
+            while not self.queue.empty():
+                self.queue.get_nowait()
+            self.reply_bytes = 0
+            self.queue.put_nowait(error)
+
+        async def send(self, body: bytes, quick: bool, replay: bool = False) -> bool:
+            if replay and self.send_lock.locked():
+                return False
+            if not replay:
+                self.upload_wait_since = time.monotonic()
+                self.upload_wait_phase = 'send-lock'
+                self.upload_wait_bytes = len(body)
+            try:
+                async with self.send_lock:
+                    return await self._send(body, quick, replay)
+            finally:
+                if not replay:
+                    self.upload_wait_since = None
+                    self.upload_wait_phase = '-'
+                    self.upload_wait_bytes = 0
+
+        async def _send(self, body: bytes, quick: bool, replay: bool) -> bool:
+            async with self.capacity:
+                if replay and not self._has_capacity(len(body)):
+                    return False
+                if not replay:
+                    self.upload_wait_phase = 'channel-capacity'
+                    await asyncio.wait_for(self.capacity.wait_for(lambda: self.closed or self._has_capacity(len(body))),
+                                           REQUEST_TIMEOUT)
+            if self.closed:
+                raise ConnectionError('H2 channel closed')
+            if not replay:
+                self.upload_wait_phase = 'lane-capacity'
+            if not await self.lane._reserve(len(body), wait=not replay):
+                return False
+            if self.closed:
+                await self.lane._release(len(body))
+                raise ConnectionError('H2 channel closed')
+            replay_packet = self._find_packet(body) if replay else None
+            now = time.monotonic()
+            if replay and (replay_packet is None or replay_packet.pending is not None
+                           or not self._replay_due(replay_packet, now)):
+                await self.lane._release(len(body))
+                return False
+            self.pending_bytes += len(body)
+            self.requests += 1
+            self.replay_requests += int(replay)
+            self.up += len(body)
+            stats.bytes_up += len(body)
+            if not replay:
+                self.last_native_send = now
+            native_packet = self._remember_packet(body, now) if not replay else None
+            if quick:
+                self.quick_requests += 1
+            packet = replay_packet or native_packet
+            trace = (_RequestTrace(packet.sequence if packet is not None else self.requests,
+                                   now, replay, len(body))
+                     if log.isEnabledFor(logging.DEBUG) else None)
+            task = asyncio.create_task(self._run_request(body, replay, packet, trace))
+            self.pending[task] = len(body)
+            self.pending_since[task] = now
+            if trace is not None:
+                self.request_traces[task] = trace
+            if native_packet is not None:
+                native_packet.originals.add(task)
+                self._trim_history(now)
+            if replay:
+                if not self._overdue_original(replay_packet, now):
+                    self.poll_requests += 1
+                    if not replay_packet.replayed:
+                        self.first_poll_gap = max(self.first_poll_gap, now - self.last_progress)
+                self.replay_pending.add(task)
+                replay_packet.attempts += 1
+                replay_packet.last_attempt_at = now
+                replay_packet.pending = task
+            return True
+
+        def _find_packet(self, body: bytes) -> Optional[_ReplayPacket]:
+            return next((entry for entry in self.replay_history if entry.body == body), None)
+
+        def _remember_packet(self, body: bytes, now: float) -> Optional[_ReplayPacket]:
+            key = body[:8]
+            if key == b'\x00' * 8:
+                return None
+            if self.replay_key != key:
+                self.replay_history.clear()
+                self.replay_key = key
+            if len(body) > REPLAY_HISTORY_BYTES:
+                return None
+            packet = self._find_packet(body)
+            if packet is None:
+                packet = _ReplayPacket(now, body, self.requests)
+                self.replay_history.append(packet)
+            return packet
+
+        def _trim_history(self, now: float) -> None:
+            retained_bytes = sum(len(entry.body) for entry in self.replay_history)
+            while len(self.replay_history) > REPLAY_HISTORY_PACKETS or retained_bytes > REPLAY_HISTORY_BYTES:
+                victim = next((entry for entry in self.replay_history if not entry.originals
+                               and not (entry.retired and entry.attempts < REPLAY_MAX_ATTEMPTS
+                                        and now - entry.sent_at <= REPLAY_MAX_AGE)),
+                              self.replay_history[0])
+                self.replay_history.remove(victim)
+                retained_bytes -= len(victim.body)
+
+        async def _run_request(self, body: bytes, replay: bool, packet: Optional[_ReplayPacket],
+                               trace: Optional[_RequestTrace]) -> None:
+            task = asyncio.current_task()
+            try:
+                reply = await self.lane._post(body, self.channel_id, replay=replay, channel=self)
+                self.last_progress = time.monotonic()
+                if reply and not self.closed:
+                    if self.queue.full() or self.reply_bytes + len(reply) > MAX_CHANNEL_BYTES:
+                        raise BufferError('H2 client response queue exceeded bound')
+                    self.reply_bytes += len(reply)
+                    self.queue.put_nowait(reply)
+                if trace is not None:
+                    trace.phase = 'complete'
+            except asyncio.CancelledError:
+                if trace is not None:
+                    trace.phase = 'cancelled-' + trace.phase
+                raise
+            except _MTProtoTransportError as exc:
+                if trace is not None:
+                    trace.phase = 'transport-error'
+                stats.h2_errors += 1
+                if not self.closed:
+                    log.warning('[%s] H2 lane=%d channel=%d host=%s MTProto transport error=%s '
+                                'request=%d encrypted=%d bytes=%d replay=%d; reporting to client',
+                                self.label, self.lane.lane_id, self.channel_id, self.lane.host, exc,
+                                trace.request if trace is not None else 0,
+                                body[:8] != b'\x00' * 8, len(body), replay)
+                self._fail(exc)
+            except Exception as exc:
+                if trace is not None:
+                    trace.phase = 'error-' + type(exc).__name__
+                stats.h2_errors += 1
+                if isinstance(exc, (httpx.HTTPError, OSError, ValueError, BufferError)):
+                    log.warning('[%s] H2 lane=%d channel=%d request failed: %s: %s; '
+                                'detail=[%s]; '
+                                'closing native channel, reconnect may select another domain',
+                                self.label, self.lane.lane_id, self.channel_id, type(exc).__name__, exc,
+                                trace.summary(time.monotonic()) if trace is not None else '-')
+                else:
+                    log.exception('[%s] H2 lane=%d channel=%d unexpected request failure',
+                                  self.label, self.lane.lane_id, self.channel_id)
+                self._fail(exc)
+            finally:
+                await self._finish_request(task, packet)
+
+        async def _finish_request(self, task: asyncio.Task, packet: Optional[_ReplayPacket] = None) -> None:
+            length = self.pending.pop(task, None)
+            if length is None:
+                return
+            trace = self.request_traces.pop(task, None)
+            if trace is not None:
+                trace.finished_at = time.monotonic()
+                self.recent_traces.append(trace)
+            self.pending_bytes -= length
+            self.pending_since.pop(task, None)
+            self.sent_since.pop(task, None)
+            self.replay_pending.discard(task)
+            if packet is None:
+                packet = next((entry for entry in self.replay_history
+                               if task in entry.originals or entry.pending is task), None)
+            if packet is not None:
+                packet.originals.discard(task)
+                if packet.pending is task:
+                    packet.pending = None
+            await self.lane._release(length)
+            async with self.capacity:
+                self.capacity.notify_all()
+            self._wake_receiver()
+
+        async def _recover(self) -> None:
+            while not self.closed:
+                try:
+                    await asyncio.wait_for(self.recovery_wakeup.wait(), REPLAY_CHECK_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
+                self.recovery_wakeup.clear()
+                now = time.monotonic()
+                self.lane.log_wait(now)
+                await self._make_upload_room(now)
+                if self.closed or self.native_backpressure:
+                    continue
+                def priority(entry):
+                    overdue = self._overdue_original(entry, now)
+                    return (not overdue, entry.sequence if overdue else -entry.sequence)
+
+                candidates = sorted(self.replay_history, key=priority)
+                for entry in candidates:
+                    if not self._replay_due(entry, now):
+                        continue
+                    replace = entry.pending
+                    if replace is None and len(self.replay_pending) >= MAX_CHANNEL_REPLAYS:
+                        replace = next((task for task in self.pending if task in self.replay_pending
+                                        and task not in self.receiving_tasks), None)
+                        if replace is None:
+                            continue
+                    if replace is not None:
+                        sent = self.sent_since.get(replace)
+                        if (replace in self.receiving_tasks
+                                or sent is None or now - sent < REPLAY_SLOT_SECONDS):
+                            continue
+                        replace.cancel()
+                        await asyncio.gather(replace, return_exceptions=True)
+                        self.replay_rotations += 1
+                    await self.send(entry.body, False, replay=True)
+                    break
+
+        async def receive(self) -> bytes:
+            value = await self.queue.get()
+            if isinstance(value, Exception):
+                raise value
+            self.reply_bytes -= len(value)
+            self._wake_receiver()
+            return value
+
+        async def close(self) -> None:
+            async with self.close_lock:
+                if self.close_done:
+                    return
+                waiting = self._wait_state(time.monotonic())
+                if log.isEnabledFor(logging.DEBUG) and self.request_traces:
+                    now = time.monotonic()
+                    traces = sorted(self.request_traces.values(), key=lambda trace: trace.started)[:3]
+                    log.debug('H2 DETAIL CLOSE lane=%d [%s]', self.lane.lane_id,
+                              '; '.join(self._request_detail(trace, now) for trace in traces))
+                self._fail(ConnectionError('H2 channel closed'))
+                self.closed = True
+                tasks = list(self.pending)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                for task in list(self.pending):
+                    await self._finish_request(task)
+                self.replay_pending.clear()
+                self.replay_history.clear()
+                self.sent_since.clear()
+                self.request_traces.clear()
+                self.recent_traces.clear()
+                self.lane.channels.discard(self)
+                self.close_done = True
+                log.debug('[%s] H2 channel=%d closed lane=%d requests=%d replays=%d rotations=%d capacity_rotations=%d up=%d down=%d '
+                         'quickack=%d duration=%.1fs remaining_channels=%d; %s',
+                         self.label, self.channel_id, self.lane.lane_id, self.requests,
+                         self.replay_requests, self.replay_rotations, self.capacity_rotations, self.up, self.down, self.quick_requests,
+                         time.monotonic() - self.started, len(self.lane.channels), waiting)
+
+    class _HttpLane:
+        def __init__(self, host: str, lane_id: int):
+            self.host, self.lane_id = host, lane_id
+            self.channels: Set[_HttpChannel] = set()
+            self.failed_until = 0.0
+            self.closed = False
+            self.tcp_connections = self.requests = self.responses = self.errors = 0
+            self.slow_headers = self.slow_bodies = self.replays = 0
+            self.max_headers_seconds = self.max_body_seconds = 0.0
+            self.next_wait_log = self.next_slow_log = 0.0
+            self.next_capacity_log = 0.0
+            self.capacity_rotations = 0
+            self.next_large_slow_log = 0.0
+            self.inflight = self.queued_bytes = self.max_inflight = 0
+            self.reply_buffer_bytes = 0
+            self.capacity = asyncio.Condition()
+            self.client = httpx.AsyncClient(
+                transport=H2Transport(create_ssl_context(), max_streams=MAX_LANE_REQUESTS),
+                trust_env=False,
+                timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=8, pool=REQUEST_TIMEOUT),
+            )
+
+        async def _trace(self, event: str, info: Dict) -> None:
+            if event == 'connection.connect_tcp.started':
+                self.tcp_connections += 1
+                stats.h2_tcp_connections += 1
+                log.debug('H2 lane=%d TCP_OPEN connection=%d host=%s channels=%d',
+                         self.lane_id, self.tcp_connections, self.host, len(self.channels))
+
+        async def _preflight(self) -> None:
+            started = time.monotonic()
+            async with self.client.stream('HEAD', 'https://' + self.host + '/api',
+                                         extensions={'trace': self._trace}) as response:
+                if response.http_version != 'HTTP/2':
+                    raise ValueError('CF /api preflight negotiated ' + response.http_version)
+                if not (200 <= response.status_code < 300 or response.status_code in (405, 501)):
+                    raise ConnectionError('CF /api preflight HTTP %d cf_ray=%s' % (
+                        response.status_code, response.headers.get('cf-ray', '-')))
+                log.debug('H2 lane=%d ready host=%s status=%d ms=%.0f',
+                         self.lane_id, self.host, response.status_code,
+                         (time.monotonic() - started) * 1000)
+
+        def _has_capacity(self, length: int) -> bool:
+            return self.inflight < MAX_LANE_REQUESTS and self.queued_bytes + length <= MAX_LANE_BYTES
+
+        async def _reserve(self, length: int, wait: bool = True) -> bool:
+            async with self.capacity:
+                if not wait and not self._has_capacity(length):
+                    return False
+                if wait:
+                    await asyncio.wait_for(self.capacity.wait_for(lambda: self.closed or self._has_capacity(length)),
+                                           REQUEST_TIMEOUT)
+                if self.closed:
+                    raise ConnectionError('H2 lane closed')
+                self.inflight += 1
+                self.queued_bytes += length
+                self.max_inflight = max(self.max_inflight, self.inflight)
+                return True
+
+        async def _release(self, length: int) -> None:
+            async with self.capacity:
+                self.inflight -= 1
+                self.queued_bytes -= length
+                self.capacity.notify_all()
+
+        async def _post(self, body: bytes, channel_id: int, replay: bool = False,
+                        channel: Optional[_HttpChannel] = None) -> bytes:
+            self.requests += 1
+            self.replays += int(replay)
+            stats.h2_requests += 1
+            request_id = self.requests
+            started = time.monotonic()
+            buffered = 0
+            receiving = False
+            request_task = asyncio.current_task()
+            trace = channel.request_traces.get(request_task) if channel is not None else None
+            if trace is not None:
+                trace.request = request_id
+                trace.phase = 'connect-or-slot'
+
+            async def request_trace(event, info):
+                await self._trace(event, info)
+                if event == 'http2.send_request_body.complete' and channel is not None:
+                    channel.sent_since[request_task] = time.monotonic()
+                if trace is not None:
+                    if event == 'connection.connect_tcp.started':
+                        trace.phase = 'connect'
+                    elif event == 'http2.wait_for_stream.started':
+                        trace.phase = 'stream-slot'
+                    elif event == 'http2.send_request_headers.started':
+                        trace.stream = info['stream_id']
+                        trace.phase = 'upload'
+                    elif event == 'http2.send_request_body.complete':
+                        trace.sent_at = time.monotonic()
+                        trace.phase = 'headers' if trace.headers_at is None else 'body'
+
+            def response_started():
+                nonlocal receiving
+                if trace is not None and trace.headers_at is None:
+                    trace.headers_at = time.monotonic()
+                    trace.phase = 'body'
+                if channel is not None and not receiving:
+                    channel.receiving_tasks.add(request_task)
+                    channel.last_progress = time.monotonic()
+                    receiving = True
+
+            try:
+                async with self.client.stream(
+                    'POST', 'https://' + self.host + '/api', content=body,
+                    headers={'content-type': 'application/octet-stream', 'accept-encoding': 'identity'},
+                    extensions={'trace': request_trace,
+                                'h2_response_started': response_started}) as response:
+                    headers_at = time.monotonic()
+                    if trace is not None:
+                        trace.cf_ray = ''.join(c for c in response.headers.get('cf-ray', '-')[:64]
+                                               if c.isascii() and (c.isalnum() or c == '-'))
+                    self.slow_headers += int(headers_at - started >= SLOW_RESPONSE_SECONDS)
+                    self.max_headers_seconds = max(self.max_headers_seconds, headers_at - started)
+                    if response.http_version != 'HTTP/2':
+                        raise ValueError('CF /api downgraded to ' + response.http_version)
+                    if response.status_code in (403, 404, 429, 444):
+                        raise _MTProtoTransportError(-response.status_code, 'HTTP %d cf_ray=%s' % (
+                            response.status_code, response.headers.get('cf-ray', '-')))
+                    if response.status_code != 200:
+                        raise ConnectionError('CF /api HTTP %d cf_ray=%s' % (
+                            response.status_code, response.headers.get('cf-ray', '-')))
+                    if 'text/html' in response.headers.get('content-type', '').lower():
+                        raise ValueError('CF /api returned HTML instead of MTProto')
+                    response_started()
+                    length_header = response.headers.get('content-length')
+                    declared_length = int(length_header) if length_header is not None else None
+                    if declared_length is not None and not 0 <= declared_length <= MAX_PACKET:
+                        raise BufferError('H2 response Content-Length exceeds native packet bound')
+                    content = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(content) + len(chunk) > MAX_PACKET:
+                            raise BufferError('H2 response exceeds native packet bound')
+                        if self.reply_buffer_bytes + len(chunk) > MAX_LANE_REPLY_BYTES:
+                            raise _ReplyBufferFull('H2 lane response buffers exceeded bound')
+                        self.reply_buffer_bytes += len(chunk)
+                        buffered += len(chunk)
+                        content.extend(chunk)
+                        if trace is not None:
+                            trace.received += len(chunk)
+                        if channel is not None:
+                            channel.last_progress = time.monotonic()
+                    received = len(content)
+                    if (declared_length is not None
+                            and response.headers.get('content-encoding', 'identity') == 'identity'
+                            and received != declared_length):
+                        raise ValueError('incomplete H2 response body')
+                    if content and len(content) % 4:
+                        raise ValueError('CF /api response is not an aligned MTProto packet')
+                    if len(content) == 4:
+                        code, = struct.unpack('<i', content)
+                        if code < 0:
+                            raise _MTProtoTransportError(code, 'HTTP 200 payload')
+                    self.responses += 1
+                    if channel is not None:
+                        channel.http_bytes += received
+                        channel.small_responses += int(received <= 4096)
+                        channel.large_responses += int(received > 4096)
+                    finished = time.monotonic()
+                    body_seconds = finished - headers_at
+                    self.max_body_seconds = max(self.max_body_seconds, body_seconds)
+                    self.slow_bodies += int(body_seconds >= SLOW_RESPONSE_SECONDS)
+                    next_slow = self.next_large_slow_log if received > 4096 else self.next_slow_log
+                    if finished - started >= SLOW_RESPONSE_SECONDS and finished >= next_slow:
+                        if received > 4096:
+                            self.next_large_slow_log = finished + DIAGNOSTIC_INTERVAL
+                        else:
+                            self.next_slow_log = finished + DIAGNOSTIC_INTERVAL
+                        log.debug('H2 SLOW lane=%d channel=%d request=%d bytes=%d replay=%d '
+                                  'headers_ms=%.0f body_ms=%.0f detail=[%s]',
+                                  self.lane_id, channel_id, request_id, received, replay,
+                                  (headers_at - started) * 1000, body_seconds * 1000,
+                                  trace.summary(finished) if trace is not None else '-')
+                    return bytes(content)
+            except _MTProtoTransportError:
+                self.errors += 1
+                raise
+            except _ReplyBufferFull:
+                raise
+            except (httpx.HTTPError, OSError, ValueError, BufferError):
+                self.errors += 1
+                self.failed_until = time.monotonic() + DOMAIN_COOLDOWN
+                raise
+            finally:
+                self.reply_buffer_bytes -= buffered
+                if receiving:
+                    channel.receiving_tasks.discard(request_task)
+
+        def log_wait(self, now: float) -> None:
+            if not log.isEnabledFor(logging.DEBUG) or now < self.next_wait_log:
+                return
+            self.next_wait_log = now + 1.0
+            waiting = [channel for channel in self.channels
+                       if ((channel.delivering_since is not None
+                            and now - channel.delivering_since >= SLOW_RESPONSE_SECONDS) or any(
+                           task not in channel.replay_pending
+                           and task not in channel.receiving_tasks
+                           and now - started >= SLOW_RESPONSE_SECONDS
+                           for task, started in channel.pending_since.items()))
+                       and now - channel.last_native_send <= REPLAY_MAX_AGE]
+            if waiting:
+                self.next_wait_log = now + DIAGNOSTIC_INTERVAL
+                waiting.sort(key=lambda channel: channel.channel_id)
+                log.debug('H2 WAIT lane=%d affected=%d inflight=%d body_buffer=%d [%s]',
+                          self.lane_id, len(waiting), self.inflight, self.reply_buffer_bytes,
+                          '; '.join(channel._wait_state(now) for channel in waiting[:8]))
+                details = sorted(((channel, trace) for channel in waiting for trace in channel.request_traces.values()
+                                  if not trace.replay and now - trace.started >= SLOW_RESPONSE_SECONDS),
+                                 key=lambda pair: pair[1].started)[:12]
+                if details:
+                    log.debug('H2 DETAIL lane=%d [%s]', self.lane_id,
+                              '; '.join(channel._request_detail(trace, now) for channel, trace in details))
+
+        def log_flow(self, now: float) -> None:
+            if log.isEnabledFor(logging.DEBUG) and self.channels:
+                channels = sorted(self.channels, key=lambda channel: channel.channel_id)
+                for offset in range(0, len(channels), 8):
+                    log.debug('H2 FLOW lane=%d [%s]', self.lane_id,
+                              '; '.join(channel._flow_state(now) for channel in channels[offset:offset + 8]))
+
+        def summary(self) -> str:
+            return ('lane=%d host=%s channels=%d tcp_connections=%d requests=%d replies=%d '
+                    'errors=%d inflight=%d max_inflight=%d queued_bytes=%d reply_buffer_bytes=%d '
+                    'replays=%d capacity_rotations=%d slow_headers=%d slow_bodies=%d max_headers_ms=%.0f max_body_ms=%.0f' % (
+                        self.lane_id, self.host, len(self.channels), self.tcp_connections,
+                        self.requests, self.responses, self.errors, self.inflight,
+                        self.max_inflight, self.queued_bytes, self.reply_buffer_bytes,
+                        self.replays, self.capacity_rotations, self.slow_headers, self.slow_bodies,
+                        self.max_headers_seconds * 1000, self.max_body_seconds * 1000))
+
+        async def close(self) -> None:
+            self.closed = True
+            async with self.capacity:
+                self.capacity.notify_all()
+            await asyncio.gather(*(channel.close() for channel in list(self.channels)))
+            await self.client.aclose()
+            log.debug('H2 CLOSED %s', self.summary())
+
+
+    class CfH2Pool:
+        def __init__(self, domains=None):
+            for name in ('httpx', 'httpcore', 'hpack', 'h2'):
+                logging.getLogger(name).setLevel(logging.WARNING)
+            self.lanes: Dict[str, _HttpLane] = {}
+            self.locks: Dict[str, asyncio.Lock] = {}
+            self.failed_until: Dict[str, float] = {}
+            self.setup_retry_after: Dict[int, float] = {}
+            self.next_lane = self.next_channel = 0
+            self.closed = False
+            self.set_domains(domains or [])
+
+        def set_domains(self, domains):
+            balancer.update_domains_list(list(domains or []))
+
+        async def open(self, dc: int, label: str) -> Optional[_HttpChannel]:
+            if self.closed:
+                raise ConnectionError('H2 pool closed')
+            if time.monotonic() < self.setup_retry_after.get(dc, 0):
+                return None
+            try:
+                return await asyncio.wait_for(self._open(dc, label), SETUP_TIMEOUT)
+            except asyncio.TimeoutError:
+                self.setup_retry_after[dc] = time.monotonic() + DOMAIN_COOLDOWN
+                stats.h2_errors += 1
+                log.warning('[%s] H2 DC%d setup timed out; using WS for %.0fs',
+                            label, dc, DOMAIN_COOLDOWN)
+                return None
+
+        async def _open(self, dc: int, label: str) -> Optional[_HttpChannel]:
+            if self.closed:
+                raise ConnectionError('H2 pool closed')
+            if dc not in DC_DEFAULT_IPS:
+                log.warning('[%s] H2 unsupported DC%d -> existing WS route', label, dc)
+                return None
+            for base_domain in balancer.get_domains_for_dc(dc):
+                host = 'kws%d.%s' % (dc, base_domain)
+                async with self.locks.setdefault(host, asyncio.Lock()):
+                    if self.closed:
+                        raise ConnectionError('H2 pool closed')
+                    lane = self.lanes.get(host)
+                    if time.monotonic() < max(self.failed_until.get(host, 0),
+                                             lane.failed_until if lane else 0):
+                        continue
+                    if lane is None:
+                        self.next_lane += 1
+                        lane = _HttpLane(host, self.next_lane)
+                        try:
+                            await lane._preflight()
+                        except (httpx.HTTPError, OSError, ValueError) as exc:
+                            stats.h2_errors += 1
+                            self.failed_until[host] = time.monotonic() + DOMAIN_COOLDOWN
+                            log.warning('[%s] H2 lane=%d preflight failed host=%s: %s: %s',
+                                        label, lane.lane_id, host, type(exc).__name__, exc)
+                            await lane.close()
+                            continue
+                        except asyncio.CancelledError:
+                            await lane.close()
+                            raise
+                        if self.closed:
+                            await lane.close()
+                            raise ConnectionError('H2 pool closed during preflight')
+                        self.lanes[host] = lane
+                    self.next_channel += 1
+                    channel = _HttpChannel(lane, self.next_channel, label)
+                    balancer.update_domain_for_dc(dc, base_domain)
+                    log.info('[%s] ROUTE DC%d media -> H2 lane=%d channel=%d host=%s '
+                             'channels=%d tcp_connections=%d', label, dc, lane.lane_id,
+                             channel.channel_id, host, len(lane.channels), lane.tcp_connections)
+                    return channel
+            log.debug('[%s] H2 DC%d unavailable; using WS', label, dc)
+            return None
+
+        def log_stats(self) -> None:
+            for lane in self.lanes.values():
+                if lane.channels:
+                    log.debug('H2 STATS %s', lane.summary())
+
+        def log_flow(self, now: float) -> None:
+            for lane in self.lanes.values():
+                lane.log_flow(now)
+
+        async def close(self) -> None:
+            self.closed = True
+            await asyncio.gather(*(lane.close() for lane in self.lanes.values()))
+            self.lanes.clear()
+
+
+    async def bridge_h2(reader, writer, channel: _HttpChannel, ctx, tag: bytes) -> None:
+        async def write_native(data):
+            try:
+                writer.write(ctx.clt_enc.update(data))
+                await writer.drain()
+            except OSError as exc:
+                raise _NativeDeliveryError(str(exc)) from exc
+
+        async def upload() -> None:
+            while True:
+                try:
+                    body, quick = await _read_packet(reader, ctx.clt_dec, tag)
+                except OSError as exc:
+                    raise _NativeDeliveryError(str(exc)) from exc
+                await channel.send(body, quick)
+
+        async def download() -> None:
+            while True:
+                body = await channel.receive()
+                if channel.closed:
+                    raise _NativeDeliveryError('H2 channel closed before native response')
+                channel.delivering_since = time.monotonic()
+                try:
+                    await write_native(_encode_reply(body, tag))
+                finally:
+                    channel.delivering_since = None
+                channel.down += len(body)
+                stats.bytes_down += len(body)
+                channel.last_progress = time.monotonic()
+                channel._wake_receiver()
+
+        tasks = [asyncio.create_task(upload()), asyncio.create_task(download()),
+                 asyncio.create_task(channel._recover())]
+        try:
+            try:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if channel.transport_error is not None:
+                await write_native(_encode_reply(struct.pack('<i', channel.transport_error), tag))
+                channel.down += 4
+                stats.bytes_down += 4
+            else:
+                for task in done:
+                    task.result()
+        except asyncio.IncompleteReadError:
+            log.debug('[%s] H2 channel=%d native EOF', channel.label, channel.channel_id)
+        except _NativeDeliveryError as exc:
+            log.debug('[%s] H2 channel=%d native closed: %s', channel.label, channel.channel_id, exc)
+        except (httpx.HTTPError, OSError, ValueError, BufferError, asyncio.TimeoutError) as exc:
+            if not channel.closed:
+                log.warning('[%s] H2 channel=%d bridge ended: %s: %s',
+                            channel.label, channel.channel_id, type(exc).__name__, exc)
+        finally:
+            await channel.close()
+
+
+
+    STREAM_RECEIVE_WINDOW = 256 * 1024
+    CONNECTION_RECEIVE_WINDOW = 4 * 1024 * 1024
+
+
+    class _ResponseStream(httpx.AsyncByteStream):
+        def __init__(self, connection, stream_id, read_timeout):
+            self.connection = connection
+            self.stream_id = stream_id
+            self.read_timeout = read_timeout
+            self.changed = asyncio.Event()
+            self.chunks = deque()
+            self.headers = None
+            self.response_started = None
+            self.error = None
+            self.ended = False
+            self.closed = False
+            self.extensions = {'http_version': b'HTTP/2', 'stream_id': stream_id}
+
+        async def wait(self):
+            try:
+                await asyncio.wait_for(self.changed.wait(), self.read_timeout)
+            except asyncio.TimeoutError as exc:
+                raise httpx.ReadTimeout('Timed out waiting for H2 stream %d' % self.stream_id) from exc
+
+        def check_error(self):
+            if self.error is not None:
+                raise self.error
+
+        async def __aiter__(self):
+            while not self.closed:
+                self.changed.clear()
+                self.check_error()
+                if self.chunks:
+                    data, credit = self.chunks.popleft()
+                    yield data
+                    self.connection.consumed(self, credit)
+                elif self.ended:
+                    return
+                else:
+                    await self.wait()
+
+        async def aclose(self):
+            if not self.closed:
+                self.closed = True
+                self.chunks.clear()
+                self.connection.release(self)
+                self.changed.set()
+
+
+    class _Connection:
+        def __init__(self, reader, writer, max_streams, write_timeout):
+            self.reader, self.writer = reader, writer
+            self.max_streams = max_streams
+            self.write_timeout = write_timeout
+            self.h2 = H2Connection(config=H2Configuration(client_side=True))
+            self.h2.local_settings = Settings(
+                client=True, initial_values={SettingCodes.ENABLE_PUSH: 0,
+                                             SettingCodes.INITIAL_WINDOW_SIZE: STREAM_RECEIVE_WINDOW})
+            self.streams = {}
+            self.changed = asyncio.Event()
+            self.write_lock = asyncio.Lock()
+            self.settings_received = False
+            self.error = None
+            self.h2.initiate_connection()
+            self.h2.increment_flow_control_window(CONNECTION_RECEIVE_WINDOW - 65535)
+            self.flush()
+            self.reader_task = asyncio.create_task(self.read_loop())
+
+        def get_extra_info(self, name):
+            return self.writer.get_extra_info(name)
+
+        def flush(self):
+            data = self.h2.data_to_send()
+            if data:
+                self.writer.write(data)
+
+        async def drain(self):
+            try:
+                async with self.write_lock:
+                    await asyncio.wait_for(self.writer.drain(), self.write_timeout)
+            except asyncio.TimeoutError as exc:
+                error = httpx.WriteTimeout('H2 connection write timed out')
+                self.fail(error)
+                raise error from exc
+            except OSError as exc:
+                error = httpx.WriteError(str(exc))
+                self.fail(error)
+                raise error from exc
+
+        def fail(self, error):
+            if self.error is None:
+                self.error = error
+                for stream in self.streams.values():
+                    if not stream.ended:
+                        stream.error = error
+                    stream.changed.set()
+                self.changed.set()
+                self.writer.close()
+
+        async def read_loop(self):
+            try:
+                while self.error is None:
+                    data = await self.reader.read(64 * 1024)
+                    if not data:
+                        raise httpx.ReadError('H2 peer closed the connection')
+                    events = self.h2.receive_data(data)
+                    terminated = any(isinstance(e, ConnectionTerminated) for e in events)
+                    for event in events:
+                        if isinstance(event, RemoteSettingsChanged):
+                            self.settings_received = True
+                            self.changed.set()
+                        elif isinstance(event, WindowUpdated):
+                            self.changed.set()
+                        elif isinstance(event, ConnectionTerminated):
+                            raise httpx.RemoteProtocolError('H2 GOAWAY error=%s last_stream=%s' % (
+                                event.error_code, event.last_stream_id))
+                        else:
+                            stream = self.streams.get(getattr(event, 'stream_id', None))
+                            if isinstance(event, DataReceived):
+                                if event.flow_controlled_length and not terminated:
+                                    self.h2.increment_flow_control_window(event.flow_controlled_length)
+                                if stream is not None:
+                                    if event.data:
+                                        stream.chunks.append((event.data, event.flow_controlled_length))
+                                    elif not terminated:
+                                        self.consumed(stream, event.flow_controlled_length)
+                            elif stream is not None:
+                                if isinstance(event, ResponseReceived):
+                                    stream.headers = event.headers
+                                    if stream.response_started is not None:
+                                        stream.response_started()
+                                elif isinstance(event, StreamEnded):
+                                    stream.ended = True
+                                elif isinstance(event, StreamReset):
+                                    stream.error = httpx.RemoteProtocolError(
+                                        'H2 stream %d reset: %s' % (event.stream_id, event.error_code))
+                                    self.changed.set()
+                            if stream is not None:
+                                stream.changed.set()
+                    self.flush()
+                    await self.drain()
+            except asyncio.CancelledError:
+                self.fail(httpx.ReadError('H2 reader stopped'))
+                raise
+            except (OSError, H2Error, httpx.HTTPError) as exc:
+                error = exc if isinstance(exc, httpx.HTTPError) else httpx.RemoteProtocolError(str(exc))
+                self.fail(error)
+
+        def check_error(self):
+            if self.error is not None:
+                raise self.error
+
+        async def reserve(self, timeouts):
+            timeout = timeouts.get('pool')
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                self.changed.clear()
+                self.check_error()
+                if self.settings_received and len(self.streams) < min(
+                        self.max_streams, self.h2.remote_settings.max_concurrent_streams):
+                    stream_id = self.h2.get_next_available_stream_id()
+                    stream = _ResponseStream(self, stream_id, timeouts.get('read'))
+                    self.streams[stream_id] = stream
+                    return stream
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                try:
+                    await asyncio.wait_for(self.changed.wait(), remaining)
+                except asyncio.TimeoutError as exc:
+                    raise httpx.PoolTimeout('H2 stream capacity exhausted') from exc
+
+        async def send_body(self, request, stream):
+            async for data in request.stream:
+                offset = 0
+                while offset < len(data):
+                    self.changed.clear()
+                    self.check_error()
+                    stream.check_error()
+                    count = min(len(data) - offset, self.h2.max_outbound_frame_size,
+                                self.h2.local_flow_control_window(stream.stream_id))
+                    if count <= 0:
+                        try:
+                            await asyncio.wait_for(self.changed.wait(), self.write_timeout)
+                        except asyncio.TimeoutError as exc:
+                            raise httpx.WriteTimeout('H2 upload flow control timed out') from exc
+                        continue
+                    self.h2.send_data(stream.stream_id, data[offset:offset + count])
+                    offset += count
+                    self.flush()
+                    await self.drain()
+            self.h2.end_stream(stream.stream_id)
+            self.flush()
+            await self.drain()
+
+        async def request(self, request):
+            timeouts = request.extensions.get('timeout', {})
+            trace = request.extensions.get('trace')
+            if trace:
+                await trace('http2.wait_for_stream.started', {})
+            stream = await self.reserve(timeouts)
+            stream.response_started = request.extensions.get('h2_response_started')
+            stream_id = stream.stream_id
+            try:
+                headers = [(b':method', request.method.encode('ascii')),
+                           (b':scheme', request.url.raw_scheme),
+                           (b':authority', request.headers['host'].encode('ascii')),
+                           (b':path', request.url.raw_path)]
+                headers.extend((k.lower(), v) for k, v in request.headers.raw if k.lower() not in (
+                    b'host', b'connection', b'keep-alive', b'proxy-connection',
+                    b'upgrade', b'transfer-encoding'))
+                self.h2.send_headers(stream_id, headers)
+                self.flush()
+                if trace:
+                    await trace('http2.send_request_headers.started', {'stream_id': stream_id})
+                await self.send_body(request, stream)
+                if trace:
+                    await trace('http2.send_request_body.complete', {'stream_id': stream_id})
+                while stream.headers is None:
+                    stream.changed.clear()
+                    stream.check_error()
+                    await stream.wait()
+                stream.check_error()
+                status = next(int(v) for k, v in stream.headers if k == b':status')
+                return httpx.Response(status, headers=[(k, v) for k, v in stream.headers
+                                                      if not k.startswith(b':')],
+                                      stream=stream, extensions=stream.extensions)
+            except H2Error as exc:
+                await stream.aclose()
+                raise httpx.LocalProtocolError(str(exc)) from exc
+            except BaseException:
+                await stream.aclose()
+                raise
+
+        def consumed(self, stream, credit):
+            if credit and not stream.ended and not stream.closed and self.error is None:
+                try:
+                    self.h2.increment_flow_control_window(credit, stream.stream_id)
+                    self.flush()
+                except StreamClosedError:
+                    pass
+
+        def release(self, stream):
+            self.streams.pop(stream.stream_id, None)
+            if self.error is None:
+                try:
+                    self.h2.reset_stream(stream.stream_id, ErrorCodes.CANCEL)
+                    self.flush()
+                except StreamClosedError:
+                    pass
+                except OSError as exc:
+                    self.fail(httpx.WriteError(str(exc)))
+            self.changed.set()
+
+        async def aclose(self):
+            self.fail(httpx.ReadError('H2 connection closed'))
+            self.reader_task.cancel()
+            await asyncio.gather(self.reader_task, return_exceptions=True)
+            try:
+                await asyncio.wait_for(self.writer.wait_closed(), 2)
+            except (OSError, asyncio.TimeoutError):
+                pass
+
+
+    class H2Transport(httpx.AsyncBaseTransport):
+        def __init__(self, ssl_context, max_streams=64):
+            self.ssl_context = ssl_context
+            self.ssl_context.set_alpn_protocols(['h2'])
+            self.max_streams = max_streams
+            self.connection = None
+            self.origin = None
+            self.connect_lock = asyncio.Lock()
+            self.closed = False
+
+        async def handle_async_request(self, request):
+            origin = (request.url.host, request.url.port or 443)
+            if request.url.scheme != 'https' or self.origin not in (None, origin):
+                raise httpx.UnsupportedProtocol('CF H2 transport requires a single HTTPS origin')
+            async with self.connect_lock:
+                if self.closed:
+                    raise httpx.ConnectError('H2 transport closed')
+                self.origin = origin
+                if self.connection is None or self.connection.error is not None:
+                    if self.connection is not None:
+                        await self.connection.aclose()
+                    timeouts = request.extensions.get('timeout', {})
+                    trace = request.extensions.get('trace')
+                    if trace:
+                        await trace('connection.connect_tcp.started', {})
+                    writer = None
+                    try:
+                        reader, writer = await asyncio.wait_for(asyncio.open_connection(
+                            *origin, ssl=self.ssl_context, server_hostname=origin[0]),
+                            timeouts.get('connect'))
+                        if writer.get_extra_info('ssl_object').selected_alpn_protocol() != 'h2':
+                            raise httpx.RemoteProtocolError('CF origin did not negotiate h2')
+                        self.connection = _Connection(reader, writer, self.max_streams, timeouts.get('write'))
+                        if trace:
+                            await trace('connection.start_tls.complete', {'return_value': self.connection})
+                    except BaseException as exc:
+                        if self.connection is not None:
+                            self.connection.fail(httpx.ConnectError('H2 connection setup interrupted'))
+                        if writer is not None:
+                            writer.close()
+                        if isinstance(exc, asyncio.TimeoutError):
+                            raise httpx.ConnectTimeout('H2 TLS connect timed out') from exc
+                        if isinstance(exc, OSError):
+                            raise httpx.ConnectError(str(exc)) from exc
+                        raise
+                connection = self.connection
+            return await connection.request(request)
+
+        async def aclose(self):
+            self.closed = True
+            async with self.connect_lock:
+                if self.connection is not None:
+                    await self.connection.aclose()
+
+
+
+    # Upstream tg-ws-proxy protocol constants and per-DC domain selection.
+    DC_DEFAULT_IPS = {
+        1: "149.154.175.50", 2: "149.154.167.51", 3: "149.154.175.100",
+        4: "149.154.167.91", 5: "149.154.171.5", 203: "91.105.192.100",
+    }
+    PROTO_TAG_ABRIDGED = b"\xef\xef\xef\xef"
+    PROTO_TAG_INTERMEDIATE = b"\xee\xee\xee\xee"
+    PROTO_TAG_SECURE = b"\xdd\xdd\xdd\xdd"
+
+    class _Balancer:
+        def __init__(self):
+            self.domains = []
+            self._dc_to_domain = {}
+
+        def update_domains_list(self, domains):
+            clean = [str(domain).strip() for domain in domains or [] if str(domain).strip()]
+            if clean == self.domains:
+                return
+            self.domains = clean
+            self._dc_to_domain = {}
+
+        def update_domain_for_dc(self, dc, domain):
+            changed = self._dc_to_domain.get(dc) != domain
+            self._dc_to_domain[dc] = domain
+            return changed
+
+        def get_domains_for_dc(self, dc):
+            import random
+            current = self._dc_to_domain.get(dc)
+            if current:
+                yield current
+            rest = [domain for domain in self.domains if domain != current]
+            random.shuffle(rest)
+            yield from rest
+
+    class _Stats:
+        def __init__(self):
+            self.h2_errors = 0
+            self.h2_tcp_connections = 0
+            self.h2_requests = 0
+            self.bytes_up = 0
+            self.bytes_down = 0
+
+    stats = _Stats()
+    balancer = _Balancer()
+
+    def create_ssl_context():
+        import certifi
+        import ssl
+        context = ssl.create_default_context(cafile=certifi.where())
+        context.load_default_certs()
+        context.set_alpn_protocols(["h2"])
+        return context
+except ImportError:
+    pass
+
+# --- bundled from greenpass.webproxy.py ---
+import base64
+import re
+import zlib
+
+from base_plugin import BasePlugin, MethodHook
+from java import jclass
+from org.telegram.messenger import ApplicationLoader
+# --- bundled from greenpass.webproxy_payload.py ---
+# Stored as an importable module so Elyx and legacy loaders do not need a source-file path.
+DEX_PAYLOAD_ZLIB_B64 = (
+    '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'
+    '6AZMe5Mf+FaaTxpPnez31c9r4n8AuRGHcQ=='
+)
+
+
+
+def raw_class(name):
+    return jclass("java.lang.Class").forName(name)
+
+
+CharSequence = jclass("java.lang.CharSequence")
+
+
+def _methods_by_name(cls, *names):
+    """Declared methods of cls grouped by the wanted names, or None without cls."""
+    if cls is None:
+        return None
+    found = {name: [] for name in names}
+    for method in cls.getDeclaredMethods():
+        bucket = found.get(str(method.getName()))
+        if bucket is not None:
+            bucket.append(method)
+    return found
+
+
+
+ENTRY_CLASS = "com.extera.webproxy.NativeWebProxyCore"
+BuildVersion = jclass("android.os.Build$VERSION")
+
+LINK_PATTERN = re.compile(
+    r"^(?:tg://webproxy\?|tg:webproxy\?"
+    r"|https?://(?:t\.me|telegram\.me|telegram\.dog)/webproxy\?)(.+)$",
+    re.IGNORECASE,
+)
+
+
+class Dex:
+    def __init__(self, entry_class):
+        self.entry_class = entry_class
+        self.clazz = None
+        self.loaded = False
+
+    def load(self):
+        if self.loaded:
+            return
+        if self.clazz is None:
+            context = ApplicationLoader.applicationContext
+            if context is None:
+                raise RuntimeError("application context is not ready")
+            if BuildVersion.SDK_INT < 26:
+                raise RuntimeError("embedded DEX requires Android API 26+")
+            ByteBuffer = jclass("java.nio.ByteBuffer")
+            Loader = jclass("dalvik.system.InMemoryDexClassLoader")
+            loader = Loader(ByteBuffer.wrap(self._read_payload()), context.getClassLoader())
+            self.clazz = loader.loadClass(self.entry_class)
+        try:
+            self.invoke("load")
+            self.loaded = True
+        except Exception:
+            try:
+                self.invoke("unload")
+            except Exception:
+                pass
+            self.loaded = False
+            raise
+
+    def unload(self):
+        try:
+            if self.loaded and self.clazz is not None:
+                self.invoke("unload")
+        finally:
+            self.loaded = False
+
+    def invoke(self, name, *args):
+        if self.clazz is None:
+            raise RuntimeError("embedded DEX is not loaded")
+        matches = []
+        for method in self.clazz.getDeclaredMethods():
+            if str(method.getName()) == name and len(method.getParameterTypes()) == len(args):
+                method.setAccessible(True)
+                matches.append(method)
+        if len(matches) != 1:
+            raise RuntimeError("DEX method unavailable: %s/%s" % (name, len(args)))
+        try:
+            return matches[0].invoke(None, *args)
+        except Exception as error:
+            cause = None
+            try:
+                cause = error.getCause()
+            except Exception:
+                pass
+            raise RuntimeError(str(cause) if cause is not None else str(error))
+
+    def _read_payload(self):
+        try:
+            raw = zlib.decompress(base64.b64decode(DEX_PAYLOAD_ZLIB_B64))
+        except Exception as error:
+            raise RuntimeError("embedded DEX decode failed: %s" % error)
+        if raw[:4] != b"dex\n":
+            raise RuntimeError("embedded DEX payload is invalid")
+        return raw
+
+class ProxyIntentHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        intent = None
+        for value in param.args or []:
+            try:
+                if str(value.getClass().getName()) == "android.content.Intent":
+                    intent = value
+                    break
+            except Exception:
+                continue
+        if intent is None:
+            return
+        try:
+            data = intent.getData()
+            if data is None:
+                return
+            parsed = self.plugin.parse_link(str(data))
+        except Exception:
+            return
+        if parsed is None:
+            return
+        server, secret, server_port = parsed
+        server_full = server if server_port == 443 else "%s:%d" % (server, server_port)
+        try:
+            local = self.plugin.start_adapter(server_full, secret)
+        except Exception as error:
+            self.plugin.log("WEB proxy link failed: %s" % error)
+            param.setResult(True)
+            return
+        port, local_secret = local
+        Uri = jclass("android.net.Uri")
+        intent.setData(Uri.parse(
+            "tg://proxy?server=127.0.0.1&port=%d&secret=dd%s" % (port, local_secret)
+        ))
+        self.plugin.dex.invoke(
+            "upsertEntry", ApplicationLoader.applicationContext, server_full, secret)
+        self.plugin.pending_display = (server, port, local_secret, secret, server_port)
+        self.plugin._pending_rows = 0
+
+
+class SettingsCreateViewHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            self.plugin.dex.invoke("injectThirdType", param.thisObject)
+        except Exception as error:
+            self.plugin.log("WEB radio inject failed: %s" % error)
+
+        # Restore the WEB type/radio for a saved loopback entry INDEPENDENT of whether the
+        # third radio cell was just injected: stock's createView always ends with
+        # setProxyType(secret empty?0:1, false) which lands on MTProto for dd-secret entries.
+        def try_restore():
+            try:
+                self.plugin.dex.invoke("restoreWebEditState", param.thisObject)
+            except Exception as error:
+                self.plugin.log("WEB edit restore failed: %s" % error)
+
+        try_restore()
+        from android_utils import run_on_ui_thread
+        run_on_ui_thread(try_restore, 400)
+        run_on_ui_thread(try_restore, 1200)
+
+
+class ProxyTypeHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            requested = int(param.args[0])
+        except Exception:
+            return
+        try:
+            animated = bool(param.args[1]) if len(param.args) > 1 else True
+        except Exception:
+            animated = True
+        if not animated:
+            return
+        try:
+            self.plugin.dex.invoke("onProxyTypeSelected", param.thisObject, requested)
+        except Exception as error:
+            self.plugin.log("WEB type handling failed: %s" % error)
+
+
+class SaveProxyHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            info = param.args[0]
+            if info is None:
+                return
+            rewritten = bool(self.plugin.dex.invoke("rewriteForWeb", info))
+            if rewritten:
+                self.plugin.log("WEB Proxy: entry redirected to loopback adapter")
+            else:
+                addr = ''
+                secret = ''
+                try:
+                    addr = str(info.getClass().getField('address').get(info))
+                    secret = str(info.getClass().getField('secret').get(info))
+                except Exception:
+                    pass
+                self.plugin.log("WEB rewrite skipped addr=%s secret=%s" % (addr, secret))
+        except Exception as error:
+            self.plugin.log("WEB rewrite failed: %s" % error)
+
+    def after_hooked_method(self, param):
+        try:
+            named = bool(self.plugin.dex.invoke("applyWebNaming", param.getResult()))
+            if named:
+                self.plugin.log("WEB Proxy: entry titled with relay domain")
+        except Exception as error:
+            self.plugin.log("WEB naming failed: %s" % error)
+
+
+class DisplayNameHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            result = param.getResult()
+            replacement = self.plugin.dex.invoke(
+                "displayNameHook", param.args[0], "" if result is None else str(result))
+            if replacement:
+                param.setResult(replacement)
+        except Exception:
+            pass
+
+
+class TypeNameHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            result = param.getResult()
+            replacement = self.plugin.dex.invoke(
+                "typeNameHook", param.args[0], "" if result is None else str(result))
+            if replacement:
+                param.setResult(replacement)
+        except Exception:
+            pass
+
+
+class CheckProxyHook(MethodHook):
+    """WEB check runs as a real native MTProto connection through the loopback adapter.
+
+    We intercept stock checkProxy only so that WEB rows resolve to a real end-to-end
+    round-trip in the adapter instead of stocks' raw loopback counter-part. Stock
+    native_checkProxy(127.0.0.1:port, dd-secret) performs the client side of the MTProxy
+    obfuscated2 handshake; our adapter completes it (obfuscated2 + relay session + data
+    echo), so the measured RTT is genuine and the shared relay session is warmed for an
+    immediate first connection.
+    """
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        # Nothing to redirect: WEB rows are loopback 127.0.0.1 + dd-secret, which routes
+        # straight into our adapter. Let the native call run and report the real latency.
+        pass
+
+
+
+class DeleteProxyHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            info = param.args[0]
+            if info is None:
+                return
+            self.plugin.dex.invoke("deleteWebEntry", info)
+        except Exception as error:
+            self.plugin.log("WEB entry cleanup failed: %s" % error)
+
+
+class ShareLinkHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        try:
+            result = param.getResult()
+            if result is None:
+                return
+            replacement = self.plugin.dex.invoke(
+                "shareLinkHook", param.args[0], str(result))
+            if replacement and replacement != str(result):
+                param.setResult(replacement)
+        except Exception:
+            pass
+
+
+
+class SheetRowHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def before_hooked_method(self, param):
+        pending = getattr(self.plugin, 'pending_display', None)
+        if not pending or len(param.args) < 2:
+            return
+        try:
+            server, port, local_secret, web_secret, server_port = pending
+            label = '' if param.args[0] is None else str(param.args[0])
+            value = param.args[1]
+            if value is None:
+                return
+            text = str(value)
+            labels = self.plugin.proxy_type_labels()
+            row = self.plugin.pending_row_index()
+            is_type_row = (row == 0) or (labels and label in labels)
+            self.plugin.pending_row_advance()
+            if is_type_row:
+                param.args[1] = 'WEB'
+            elif label and label == self.plugin.port_label():
+                param.args[1] = str(server_port)
+            elif text == '127.0.0.1':
+                param.args[1] = server
+            elif text == str(port):
+                param.args[1] = str(server_port)
+            elif local_secret and text in ('dd' + local_secret, local_secret):
+                param.args[1] = web_secret or value
+        except Exception:
+            pass
+
+
+class CountryHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self._restore = None
+
+    def before_hooked_method(self, param):
+        try:
+            info = param.args[0]
+            if info is None:
+                return
+        except Exception:
+            return
+        try:
+            server = self.plugin.dex.invoke("webServerFor", info)
+            if not server:
+                return
+            # Temporarily resolve country against the REAL relay domain, not the loopback
+            # address: stock's getProxyCountryKey(address) would reject 127.0.0.1 as local
+            # and show Unknown. The key is extracted SYNCHRONOUSLY at the top of stock's
+            # method (verified against the 12.9.0 decompile), so the mutation only needs to
+            # span the call itself - after_hooked_method restores the original address.
+            # Without the restore, a PERSISTED list record was left with address=domain and
+            # any later saveProxyList wrote "domain:localPort" into it - tgnet then dialed
+            # the relay domain on the local adapter port forever ("connected once, then
+            # connects never again", invisible to restore/migrate which require 127.0.0.1).
+            field = info.getClass().getField('address')
+            self._restore = (info, field, str(field.get(info)))
+            field.set(info, server)
+        except Exception:
+            self._restore = None
+
+    def after_hooked_method(self, param):
+        stash = self._restore
+        self._restore = None
+        if not stash:
+            return
+        try:
+            stash[1].set(stash[0], stash[2])
+        except Exception:
+            pass
+
+
+class SheetCloseHook(MethodHook):
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    def after_hooked_method(self, param):
+        pending = getattr(self.plugin, 'pending_display', None)
+        self.plugin.pending_display = None
+        if not pending:
+            return
+        # B1: this fires when the sheet is shown, not dismissed - schedule a late
+        # orphan sweep instead of tearing the preview down while it is on screen.
+        # The DEX side keeps anything that got saved or connected in the meantime.
+        try:
+            server, port, local_secret = pending[0], pending[1], pending[2]
+            self.plugin.dex.invoke("schedulePreviewDiscard", port, server, local_secret)
+        except Exception:
+            pass
+
+
+
+class WebProxyNativePlugin(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.dex = Dex(ENTRY_CLASS)
+        self.hooks = []
+        self.pending_display = None
+        self._type_labels = None
+        self._country_label = None
+        self._port_label = None
+        self._pending_rows = 0
+
+    def proxy_type_labels(self):
+        if self._type_labels is None:
+            self._type_labels = tuple(self.localized_field_labels(["ProxyType"]))
+        return self._type_labels
+
+    def country_label(self):
+        if self._country_label is None:
+            labels = self.localized_field_labels(["Country"])
+            self._country_label = labels[0] if labels else ''
+        return self._country_label
+
+    def port_label(self):
+        if self._port_label is None:
+            labels = self.localized_field_labels(["UseProxyPort"])
+            self._port_label = labels[0] if labels else ''
+        return self._port_label
+
+    def localized_field_labels(self, names):
+        labels = []
+        try:
+            locale = raw_class("org.telegram.messenger.LocaleController")
+            lazy_meta = None
+            for m in locale.getDeclaredMethods():
+                if str(m.getName()) != "getString" or len(m.getParameterTypes()) != 1:
+                    continue
+                if str(m.getParameterTypes()[0]) != "int":
+                    continue
+                m.setAccessible(True)
+                lazy_meta = m
+                break
+            label = ''
+            if lazy_meta is not None:
+                for name in names:
+                    try:
+                        string_id = raw_class("org.telegram.R$string").getField(name).get(None)
+                        label = str(lazy_meta.invoke(None, string_id))
+                        if label:
+                            labels.append(label)
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        if not labels:
+            try:
+                resources = ApplicationLoader.applicationContext.getResources()
+                for name in names:
+                    try:
+                        string_id = raw_class("org.telegram.R$string").getField(name).get(None)
+                        label = str(resources.getString(string_id))
+                        if label:
+                            labels.append(label)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        return tuple(dict.fromkeys(labels))
+
+    def pending_row_index(self):
+        return self._pending_rows
+
+    def pending_row_advance(self):
+        self._pending_rows += 1
+
+    def on_plugin_load(self):
+        self.dex.load()
+        self.install_hooks()
+        try:
+            restored = int(self.dex.invoke(
+                "restoreEntries", ApplicationLoader.applicationContext))
+            if restored:
+                self.log("WEB proxy: restored %d relay(s)" % restored)
+        except Exception as error:
+            self.log("WEB proxy restore failed: %s" % error)
+        try:
+            # Live 10s ping of the active WEB proxy (native-level status: Connected/Ping on
+            # the list row + pill/drawer), like stock ProxyPingController.
+            self.dex.invoke("startLivePing")
+        except Exception as error:
+            self.log("WEB proxy live ping start failed: %s" % error)
+
+    def on_plugin_unload(self):
+        for hook in self.hooks:
+            try:
+                self.unhook_method(hook)
+            except Exception:
+                pass
+        self.hooks = []
+        try:
+            ours_active = bool(self.dex.invoke("isOurLoopbackActive"))
+        except Exception:
+            ours_active = False
+        try:
+            self.dex.invoke("stopAll")
+        except Exception:
+            pass
+        if ours_active:
+            self.apply_native(False, 0, "")
+        self.dex.unload()
+
+    def install_hooks(self):
+        # One getDeclaredMethods() pass per class: every getName() is a JNI
+        # round trip and AndroidUtilities alone has well over a thousand methods.
+        utils = _methods_by_name(raw_class("org.telegram.messenger.AndroidUtilities"),
+                                 "handleProxyIntent", "showProxyAlert")
+        if utils is None:
+            raise RuntimeError("AndroidUtilities not found")
+        installed = 0
+        for method in utils["handleProxyIntent"]:
+            if self._hook(method, ProxyIntentHook(self)):
+                installed += 1
+        if installed == 0:
+            raise RuntimeError("handleProxyIntent hook not installed")
+
+        settings = _methods_by_name(raw_class("org.telegram.ui.ProxySettingsActivity"),
+                                    "createView", "setProxyType")
+        if settings is not None:
+            for method in settings["createView"]:
+                if len(method.getParameterTypes()) == 1:
+                    self._hook(method, SettingsCreateViewHook(self))
+            for method in settings["setProxyType"]:
+                self._hook(method, ProxyTypeHook(self))
+
+        controller = _methods_by_name(
+            raw_class("com.exteragram.messenger.proxy.ProxyController"),
+            "saveProxy", "buildShareLink", "deleteProxy", "getDisplayName",
+            "getProxyTypeName", "requestProxyCountry") or {}
+        for method in controller.get("saveProxy", ()):
+            types = method.getParameterTypes()
+            if len(types) == 3 and str(types[0]).endswith("SharedConfig$ProxyInfo"):
+                self._hook(method, SaveProxyHook(self))
+
+        cm = _methods_by_name(raw_class("org.telegram.tgnet.ConnectionsManager"), "checkProxy")
+        if cm is not None:
+            string_cls = jclass("java.lang.String")
+            for method in cm["checkProxy"]:
+                types = method.getParameterTypes()
+                if len(types) == 6 and types[0] == string_cls:
+                    self._hook(method, CheckProxyHook(self))
+
+        for method in controller.get("buildShareLink", ()):
+            types = method.getParameterTypes()
+            if len(types) >= 1 and str(types[0]).endswith("SharedConfig$ProxyInfo"):
+                self._hook(method, ShareLinkHook(self))
+
+        table_view = _methods_by_name(raw_class("org.telegram.ui.Components.TableView"), "addRow")
+        if table_view is not None:
+            for method in table_view["addRow"]:
+                types = method.getParameterTypes()
+                if len(types) >= 2 and types[0] == CharSequence and types[1] == CharSequence:
+                    self._hook(method, SheetRowHook(self))
+
+        for method in utils["showProxyAlert"][:1]:
+            self._hook(method, SheetCloseHook(self))
+
+        for method in controller.get("deleteProxy", ()):
+            types = method.getParameterTypes()
+            if len(types) == 1 and str(types[0]).endswith("SharedConfig$ProxyInfo"):
+                self._hook(method, DeleteProxyHook(self))
+
+        for method_name, hook_cls in (("getDisplayName", DisplayNameHook), ("getProxyTypeName", TypeNameHook)):
+            for method in controller.get(method_name, ()):
+                if len(method.getParameterTypes()) == 1:
+                    self._hook(method, hook_cls(self))
+
+        for method in controller.get("requestProxyCountry", ()):
+            types = method.getParameterTypes()
+            if len(types) == 2 and str(types[0]).endswith("SharedConfig$ProxyInfo"):
+                self._hook(method, CountryHook(self))
+
+    def _hook(self, method, hook):
+        handle = self.hook_method(method, hook)
+        if handle is not None:
+            self.hooks.append(handle)
+        return handle is not None
+
+    def parse_link(self, value):
+        match = LINK_PATTERN.match((value or "").strip())
+        if not match:
+            return None
+        fields = {}
+        for pair in match.group(1).split("&"):
+            key, separator, data = pair.partition("=")
+            if separator:
+                fields[key.lower()] = data.strip()
+        server = fields.get("server") or fields.get("host") or ""
+        secret = (fields.get("secret") or "").lower()
+        # B4: split an inline "host:port" tail BEFORE the hostname check. The regex below
+        # has no ':' in its class, so the old post-regex fallback was dead code and any
+        # share link carrying "server=host:port" was rejected outright.
+        server_port = 443
+        port_raw = fields.get("server_port")
+        if port_raw:
+            try:
+                server_port = int(port_raw)
+            except ValueError:
+                pass
+        if ':' in server:
+            host_part, _, port_part = server.rpartition(':')
+            try:
+                maybe = int(port_part)
+                if 1 <= maybe <= 65535:
+                    server = host_part
+                    if server_port == 443:
+                        server_port = maybe
+            except ValueError:
+                pass
+        if not re.match(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", server):
+            return None
+        if not re.match(r"^(?:dd)?[0-9a-f]{32}$", secret):
+            return None
+        return server, secret, server_port
+
+    def start_adapter(self, server, secret):
+        result = str(self.dex.invoke("prepare", server, secret))
+        if result.startswith("error:"):
+            raise RuntimeError(result[6:])
+        port, _, local_secret = result.partition(":")
+        return int(port), local_secret
+
+    def apply_native(self, enabled, port, secret):
+        try:
+            _set_native_proxy_settings(
+                bool(enabled),
+                address="127.0.0.1",
+                port=int(port or 0),
+                secret=str(secret or ""),
+                proxy_type="MTPROTO",
+            )
+        except Exception as error:
+            self.notify("Could not apply proxy: %s" % error)

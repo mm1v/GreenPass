@@ -1,0 +1,4089 @@
+# --- bundled from greenpass.ui.py ---
+
+
+class SettingsUiMixin:
+    def _settings_java_field(self, cls, name):
+        current = cls
+        while current is not None:
+            try:
+                field = current.getDeclaredField(name)
+                field.setAccessible(True)
+                return field
+            except:
+                try:
+                    current = current.getSuperclass()
+                except:
+                    current = None
+        return None
+
+    def _settings_java_method(self, cls, name):
+        current = cls
+        while current is not None:
+            try:
+                for method in list(current.getDeclaredMethods() or []):
+                    if str(method.getName() or "") == str(name or ""):
+                        method.setAccessible(True)
+                        return method
+            except:
+                pass
+            try:
+                current = current.getSuperclass()
+            except:
+                current = None
+        return None
+
+    def _bind_view_click(self, view, callback):
+        if view is None or dynamic_proxy is None:
+            return False
+        try:
+            class _Click(dynamic_proxy(View.OnClickListener)):
+                def onClick(self, clicked_view):
+                    try:
+                        callback(clicked_view)
+                    except Exception as exc:
+                        try:
+                            BulletinHelper.show_error("Ошибка интерфейса: %s" % str(exc))
+                        except:
+                            pass
+
+            listener = _Click()
+            view.setOnClickListener(listener)
+            refs = list(getattr(self, "_settings_view_click_refs", []) or [])
+            refs.append(listener)
+            self._settings_view_click_refs = refs[-16:]
+            return True
+        except:
+            return False
+
+    def _build_settings_hero(self):
+        try:
+            fragment = get_last_fragment()
+            context = fragment.getParentActivity() if fragment else None
+            if context is None:
+                return None
+
+            dp = AndroidUtilities.dp
+            outer = FrameLayout(context)
+            outer.setPadding(0, 0, 0, 0)
+
+            card = LinearLayout(context)
+            card.setOrientation(LinearLayout.VERTICAL)
+            card.setPadding(dp(18), dp(18), dp(18), dp(18))
+
+            background = GradientDrawable()
+            background.setColor(Theme.getColor(Theme.key_windowBackgroundWhite))
+            background.setCornerRadius(0)
+            card.setBackground(background)
+            card.setClickable(True)
+            try:
+                card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+            except:
+                pass
+            self._bind_view_click(card, lambda _view: self._open_plugin_update_dialog())
+
+            top = LinearLayout(context)
+            top.setOrientation(LinearLayout.HORIZONTAL)
+            top.setGravity(Gravity.CENTER_VERTICAL)
+
+            title = TextView(context)
+            title.setText("GreenPass")
+            title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 23)
+            title.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText))
+            try:
+                title.setTypeface(AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM))
+            except:
+                pass
+            top.addView(title, LinearLayout.LayoutParams(0, -2, 1.0))
+
+            version = str(getattr(self, "version", "") or "").strip()
+            mode = self._settings_mode_title(self._get_connection_mode())
+            mode_chip = TextView(context)
+            mode_chip.setText(mode)
+            mode_chip.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+            mode_chip.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
+            mode_chip.setGravity(Gravity.CENTER)
+            mode_chip.setPadding(dp(10), dp(4), dp(10), dp(4))
+            try:
+                mode_chip.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                mode_chip.setLetterSpacing(0.04)
+            except:
+                pass
+            chip_background = GradientDrawable()
+            chip_background.setColor(Theme.getColor(Theme.key_featuredStickers_addButton))
+            chip_background.setCornerRadius(dp(12))
+            mode_chip.setBackground(chip_background)
+            mode_chip.setClickable(True)
+            self._bind_view_click(mode_chip, lambda _view: self._open_core_quick_menu())
+            top.addView(mode_chip, LinearLayout.LayoutParams(-2, -2))
+            card.addView(top, LinearLayout.LayoutParams(-1, -2))
+
+            subtitle = TextView(context)
+            subtitle.setText(Z("Универсальный прокси для Telegram") + ((" • " + version) if version else ""))
+            subtitle.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
+            subtitle.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText))
+            subtitle_params = LinearLayout.LayoutParams(-1, -2)
+            subtitle_params.topMargin = dp(7)
+            card.addView(subtitle, subtitle_params)
+
+            status_text, status_color = self._settings_connection_badge()
+            status = TextView(context)
+            status.setText(Z(status_text))
+            status.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
+            status.setTextColor(status_color)
+            status.setPadding(dp(10), dp(6), dp(10), dp(6))
+            try:
+                status_background = GradientDrawable()
+                status_background.setColor(Theme.getColor(Theme.key_dialogBackground))
+                status_background.setCornerRadius(dp(12))
+                status_background.setStroke(dp(1), status_color)
+                status.setBackground(status_background)
+            except:
+                pass
+            status_params = LinearLayout.LayoutParams(-1, -2)
+            status_params.topMargin = dp(12)
+            card.addView(status, status_params)
+
+            outer.addView(card, FrameLayout.LayoutParams(-1, -2))
+            return _Custom(view=outer)
+        except:
+            return None
+
+    def _plugin_autoupdate_enabled(self):
+        try:
+            value = self.get_setting("plugin_autoupdate_enabled", True)
+        except:
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() not in ("", "0", "false", "off", "no")
+
+    def _set_plugin_autoupdate_enabled(self, enabled, notify=False):
+        value = bool(enabled)
+        self._set_setting_value("plugin_autoupdate_enabled", value, reload_settings=False)
+        if value:
+            self._autoupdate_last_check_ts = 0
+            threading.Thread(target=lambda: self._run_autoupdate_check(force=False), daemon=True).start()
+        if notify:
+            BulletinHelper.show_success("Автообновление плагина включено" if value else "Автообновление плагина выключено")
+        return True
+
+    def _check_plugin_update_now(self):
+        if self._autoupdate_in_progress:
+            BulletinHelper.show_info("Обновления уже проверяются")
+            return True
+        BulletinHelper.show_info("Проверяю обновления GreenPass…")
+        threading.Thread(target=lambda: self._run_autoupdate_check(force=True), daemon=True).start()
+        return True
+
+    def _open_plugin_update_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            try:
+                fragment = get_last_fragment()
+                activity = fragment.getParentActivity() if fragment else None
+            except:
+                activity = None
+        if activity is None:
+            return False
+
+        try:
+            current_enabled = [bool(self._plugin_autoupdate_enabled())]
+            version = str(getattr(self, "version", "") or "").strip()
+            builder = AlertDialogBuilder(activity)
+            builder.set_title(Z("Обновления GreenPass"))
+
+            dialog_ref = [None]
+            dp = AndroidUtilities.dp
+            accent = Theme.getColor(Theme.key_featuredStickers_addButton)
+            title_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
+            muted_color = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
+            surface_color = Theme.getColor(Theme.key_windowBackgroundWhite)
+            divider_color = Theme.getColor(Theme.key_divider)
+            resource = find_class("org.telegram.messenger.R")
+
+            custom_view_ok = False
+            if dynamic_proxy is not None:
+                container = LinearLayout(activity)
+                container.setOrientation(LinearLayout.VERTICAL)
+                container.setPadding(dp(16), dp(8), dp(16), dp(8))
+
+                cards_data = []
+
+                def _build_choice_card(is_on, icon_name, title_text, desc_text):
+                    card = LinearLayout(activity)
+                    card.setOrientation(LinearLayout.HORIZONTAL)
+                    card.setGravity(Gravity.CENTER_VERTICAL)
+                    card.setPadding(dp(14), dp(12), dp(14), dp(12))
+                    card.setClickable(True)
+                    card.setFocusable(True)
+
+                    card_bg = GradientDrawable()
+                    card_bg.setCornerRadius(dp(14))
+                    card.setBackground(card_bg)
+                    try:
+                        card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+                    except:
+                        pass
+
+                    icon_id = int(getattr(resource.drawable, icon_name, 0)) if resource else 0
+                    icon_view = None
+                    if icon_id:
+                        icon_view = ImageView(activity)
+                        icon_view.setImageResource(icon_id)
+                        icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                        icon_lp.rightMargin = dp(14)
+                        card.addView(icon_view, icon_lp)
+
+                    text_layout = LinearLayout(activity)
+                    text_layout.setOrientation(LinearLayout.VERTICAL)
+
+                    title_view = TextView(activity)
+                    title_view.setText(Z(title_text))
+                    title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                    try:
+                        title_view.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                    except:
+                        pass
+                    text_layout.addView(title_view, LinearLayout.LayoutParams(-1, -2))
+
+                    desc_view = TextView(activity)
+                    desc_view.setText(Z(desc_text))
+                    desc_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                    desc_view.setTextColor(muted_color)
+                    desc_lp = LinearLayout.LayoutParams(-1, -2)
+                    desc_lp.topMargin = dp(2)
+                    text_layout.addView(desc_view, desc_lp)
+
+                    card.addView(text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
+
+                    radio_view = TextView(activity)
+                    radio_lp = LinearLayout.LayoutParams(dp(22), dp(22))
+                    radio_lp.leftMargin = dp(12)
+                    radio_bg = GradientDrawable()
+                    radio_bg.setCornerRadius(dp(11))
+                    card.addView(radio_view, radio_lp)
+
+                    return {
+                        "is_on": is_on,
+                        "card": card,
+                        "card_bg": card_bg,
+                        "icon_view": icon_view,
+                        "title_view": title_view,
+                        "radio_view": radio_view,
+                        "radio_bg": radio_bg,
+                    }
+
+                card_on = _build_choice_card(True, "msg_retry", "Автообновление: Включено", "Проверять обновления плагина в фоне")
+                card_off = _build_choice_card(False, "msg_block", "Автообновление: Выключено", "Не проверять обновления автоматически")
+                cards_data.append(card_on)
+                cards_data.append(card_off)
+
+                def _apply_visuals():
+                    is_enabled = current_enabled[0]
+                    for item in cards_data:
+                        selected = (item["is_on"] == is_enabled)
+                        c_bg = item["card_bg"]
+                        t_v = item["title_view"]
+                        r_v = item["radio_view"]
+                        r_bg = item["radio_bg"]
+                        i_v = item["icon_view"]
+
+                        if selected:
+                            accent_rgb = accent & 0x00FFFFFF
+                            c_bg.setColor((0x20 << 24) | accent_rgb)
+                            c_bg.setStroke(dp(1.5), accent)
+                            t_v.setTextColor(accent)
+                            if i_v is not None:
+                                i_v.setColorFilter(accent)
+                            r_bg.setColor(accent)
+                            r_v.setBackground(r_bg)
+                            r_v.setText("✓")
+                            r_v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                            r_v.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
+                            r_v.setGravity(Gravity.CENTER)
+                            try:
+                                r_v.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                            except:
+                                pass
+                        else:
+                            c_bg.setColor(surface_color)
+                            c_bg.setStroke(dp(1), divider_color)
+                            t_v.setTextColor(title_color)
+                            if i_v is not None:
+                                i_v.setColorFilter(muted_color)
+                            r_bg.setColor(0x00000000)
+                            r_bg.setStroke(dp(1.5), (0x55 << 24) | (muted_color & 0x00FFFFFF) if muted_color else 0x44888888)
+                            r_v.setBackground(r_bg)
+                            r_v.setText("")
+
+                def _toggle_state(target_on):
+                    if current_enabled[0] != target_on:
+                        current_enabled[0] = target_on
+                        self._set_plugin_autoupdate_enabled(target_on, notify=True)
+                        _apply_visuals()
+                        self._refresh_settings_without_reopen(reload_stack=True)
+
+                self._bind_view_click(card_on["card"], lambda _view: _toggle_state(True))
+                self._bind_view_click(card_off["card"], lambda _view: _toggle_state(False))
+
+                for item in cards_data:
+                    card_lp = LinearLayout.LayoutParams(-1, -2)
+                    card_lp.topMargin = dp(4)
+                    card_lp.bottomMargin = dp(4)
+                    container.addView(item["card"], card_lp)
+
+                action_card = LinearLayout(activity)
+                action_card.setOrientation(LinearLayout.HORIZONTAL)
+                action_card.setGravity(Gravity.CENTER_VERTICAL)
+                action_card.setPadding(dp(14), dp(12), dp(14), dp(12))
+                action_card.setClickable(True)
+                action_card.setFocusable(True)
+
+                action_bg = GradientDrawable()
+                action_bg.setCornerRadius(dp(14))
+                action_bg.setColor(surface_color)
+                action_bg.setStroke(dp(1), divider_color)
+                action_card.setBackground(action_bg)
+                try:
+                    action_card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+                except:
+                    pass
+
+                act_icon_id = int(getattr(resource.drawable, "msg_download_settings", 0)) if resource else 0
+                if act_icon_id:
+                    act_icon_view = ImageView(activity)
+                    act_icon_view.setImageResource(act_icon_id)
+                    act_icon_view.setColorFilter(accent)
+                    act_icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                    act_icon_lp.rightMargin = dp(14)
+                    action_card.addView(act_icon_view, act_icon_lp)
+
+                act_text_layout = LinearLayout(activity)
+                act_text_layout.setOrientation(LinearLayout.VERTICAL)
+
+                act_title_view = TextView(activity)
+                act_title_view.setText(Z("Проверить обновления"))
+                act_title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                act_title_view.setTextColor(title_color)
+                try:
+                    act_title_view.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                except:
+                    pass
+                act_text_layout.addView(act_title_view, LinearLayout.LayoutParams(-1, -2))
+
+                version_label = version if version else "2.5.9"
+                act_desc_view = TextView(activity)
+                act_desc_view.setText(f"{Z('Текущая версия')}: {version_label} • {Z('Поиск новой версии')}")
+                act_desc_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                act_desc_view.setTextColor(muted_color)
+                act_desc_lp = LinearLayout.LayoutParams(-1, -2)
+                act_desc_lp.topMargin = dp(2)
+                act_text_layout.addView(act_desc_view, act_desc_lp)
+
+                action_card.addView(act_text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
+
+                arrow_icon_id = int(getattr(resource.drawable, "msg_arrowright", 0)) if resource else 0
+                if arrow_icon_id:
+                    arrow_view = ImageView(activity)
+                    arrow_view.setImageResource(arrow_icon_id)
+                    arrow_view.setColorFilter(muted_color)
+                    arrow_lp = LinearLayout.LayoutParams(dp(18), dp(18))
+                    arrow_lp.leftMargin = dp(10)
+                    action_card.addView(arrow_view, arrow_lp)
+
+                def _on_action_click(_view):
+                    try:
+                        if dialog_ref[0] is not None:
+                            dialog_ref[0].dismiss()
+                    except:
+                        pass
+                    self._check_plugin_update_now()
+
+                self._bind_view_click(action_card, _on_action_click)
+
+                action_card_lp = LinearLayout.LayoutParams(-1, -2)
+                action_card_lp.topMargin = dp(10)
+                action_card_lp.bottomMargin = dp(4)
+                container.addView(action_card, action_card_lp)
+
+                _apply_visuals()
+                custom_view_ok = True
+
+            if custom_view_ok:
+                builder.set_view(container)
+            else:
+                options = [
+                    ("auto_on", "Автообновление: Включено", "Проверять обновления плагина в фоне"),
+                    ("auto_off", "Автообновление: Выключено", "Не проверять обновления автоматически"),
+                    ("check_now", "Проверить обновления", "Поиск новой версии GreenPass"),
+                ]
+
+                def _choose(dlg, which):
+                    try:
+                        dlg.dismiss()
+                    except:
+                        pass
+                    try:
+                        idx = int(which)
+                        action = options[idx][0]
+                        if action == "auto_on":
+                            if not current_enabled[0]:
+                                self._set_plugin_autoupdate_enabled(True, notify=True)
+                                self._refresh_settings_without_reopen(reload_stack=True)
+                        elif action == "auto_off":
+                            if current_enabled[0]:
+                                self._set_plugin_autoupdate_enabled(False, notify=True)
+                                self._refresh_settings_without_reopen(reload_stack=True)
+                        elif action == "check_now":
+                            self._check_plugin_update_now()
+                    except:
+                        pass
+
+                labels = [
+                    f"{'● ' if current_enabled[0] else '○ '}{Z(options[0][1])} — {Z(options[0][2])}",
+                    f"{'● ' if not current_enabled[0] else '○ '}{Z(options[1][1])} — {Z(options[1][2])}",
+                    f"🔄 {Z(options[2][1])} — {Z(options[2][2])}",
+                ]
+                builder.set_items(labels, _choose)
+
+            builder.set_negative_button(Z("Закрыть"), lambda dlg, which: dlg.dismiss())
+            builder.set_cancelable(True)
+            dialog_ref[0] = builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка диалога обновлений: " + str(exc))
+            return False
+
+    def _open_plugin_update_menu(self):
+        return self._open_plugin_update_dialog()
+
+    def _open_autoupdate_choice_dialog(self):
+        return self._open_plugin_update_dialog()
+
+    def _show_plugin_update_available(self, version, archive_path):
+        activity = self._current_activity()
+        if activity is None:
+            BulletinHelper.show_info(Z("Доступно обновление") + (" GreenPass %s" % str(version)))
+            return False
+        self._set_setting_value("plugin_autoupdate_prompted_version", str(version or ""), reload_settings=False)
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Доступно обновление"))
+        builder.set_message(Z("GreenPass %s готов к установке.") % str(version))
+
+        def _install(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._open_elyx_update_archive(archive_path)
+
+        builder.set_positive_button(Z("Установить"), _install)
+        builder.set_negative_button(Z("Позже"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+        return True
+
+    def _core_autoupdate_enabled(self):
+        try:
+            value = self.get_setting("core_autoupdate_enabled", True)
+        except:
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() not in ("", "0", "false", "off", "no")
+
+    def _set_core_autoupdate_enabled(self, enabled, notify=False):
+        value = bool(enabled)
+        self._set_setting_value("core_autoupdate_enabled", value, reload_settings=False)
+        self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
+        if value and self._libsingbox_addon_status(quick=True) in ("missing", "outdated"):
+            self._update_outdated_core_in_background()
+        if notify:
+            BulletinHelper.show_success("Автообновление ядра включено" if value else "Автообновление ядра выключено")
+        return True
+
+    def _check_core_update_now(self):
+        if self._vless_prepare_in_progress:
+            BulletinHelper.show_info("Ядро уже загружается")
+            return True
+        status = self._libsingbox_addon_status()
+        if status == "current":
+            BulletinHelper.show_success("Ядро уже актуально")
+            return True
+        if status == "missing":
+            self._download_vless_addon()
+            return True
+        if self._update_outdated_core_in_background(force=True):
+            BulletinHelper.show_info("Обновляю ядро в фоне…")
+            return True
+        BulletinHelper.show_error("Не удалось запустить обновление ядра")
+        return False
+
+    def _open_core_quick_menu(self):
+        activity = self._current_activity()
+        if activity is None:
+            return False
+        enabled = self._core_autoupdate_enabled()
+        status = self._libsingbox_addon_status(quick=True)
+        status_text = "загружается…" if self._vless_prepare_in_progress else {
+            "current": "установлено и актуально",
+            "outdated": "требуется обновление",
+            "missing": "не установлено",
+            "checking": "проверяется…",
+        }.get(status, "состояние неизвестно")
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Режим и ядро")
+        builder.set_message("Режим: %s\nЯдро GreenPass: %s\nАвтообновление: %s" % (
+            self._settings_mode_title(self._get_connection_mode()),
+            status_text,
+            "включено" if enabled else "выключено",
+        ))
+
+        def _check_now(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._check_core_update_now()
+
+        def _toggle(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._set_core_autoupdate_enabled(not enabled, notify=True)
+
+        builder.set_items(["Проверить обновление ядра"], _check_now)
+        builder.set_positive_button("Выключить автообновление" if enabled else "Включить автообновление", _toggle)
+        builder.set_negative_button("Закрыть", lambda dlg, which: dlg.dismiss())
+        builder.show()
+        return True
+
+    def _open_greenpass_import_file_picker(self):
+        try:
+            Intent = jclass("android.content.Intent") if jclass is not None else find_class("android.content.Intent")
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("*/*")
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            activity = self._current_activity()
+            if activity is not None:
+                activity.startActivityForResult(intent, int(GREENPASS_IMPORT_FILE_PICKER_REQ))
+            else:
+                BulletinHelper.show_error("Не удалось открыть файл")
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка выбора: %s" % str(exc))
+
+    def _confirm_greenpass_file_import(self, file_path, display_name=""):
+        activity = self._current_activity()
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть импорт")
+            return
+        try:
+            name = str(display_name or GREENPASS_EXPORT_FILE_NAME)
+        except:
+            name = GREENPASS_EXPORT_FILE_NAME
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Импорт GreenPass")
+            builder.set_message("Импортировать настройки из %s?\nТекущие настройки будут заменены." % name)
+
+            def _on_yes(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._process_greenpass_import_file_path(file_path)
+
+            def _on_no(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+
+            builder.set_positive_button("Импортировать", _on_yes)
+            builder.set_negative_button("Отмена", _on_no)
+            builder.show()
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка импорта: %s" % str(exc))
+
+    def _confirm_singconf_file_import(self, file_path, display_name=""):
+        activity = self._current_activity()
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть импорт")
+            return
+        try:
+            name = str(display_name or os.path.basename(str(file_path)) or "config.singconf")
+        except:
+            name = "config.singconf"
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Импорт sing-box")
+            builder.set_message("Импортировать sing-box конфиг из %s?" % name)
+
+            def _on_yes(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._process_singconf_import_file_path(file_path, name)
+
+            def _on_no(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+
+            builder.set_positive_button("Импортировать", _on_yes)
+            builder.set_negative_button("Отмена", _on_no)
+            builder.show()
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка импорта: %s" % str(exc))
+
+    def _confirm_qwdtt_file_import(self, file_path, display_name=""):
+        activity = self._current_activity()
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть qWDTT")
+            return
+        name = str(display_name or os.path.basename(str(file_path)) or "config.qwdtt")
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Импорт qWDTT")
+        builder.set_message("Импортировать %s?" % name)
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._process_qwdtt_import_file_path(file_path)
+
+        builder.set_positive_button("Импортировать", _on_yes)
+        builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+        builder.set_cancelable(True)
+        builder.show()
+
+    def _confirm_mihomo_file_import(self, file_path, display_name=""):
+        activity = self._current_activity()
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть импорт")
+            return
+        name = str(display_name or os.path.basename(str(file_path)) or "config.mihomo")
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Импорт Mihomo")
+        builder.set_message("Импортировать Mihomo конфиг из %s?" % name)
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._process_mihomo_import_file_path(file_path, name)
+
+        builder.set_positive_button("Импортировать", _on_yes)
+        builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+        builder.set_cancelable(True)
+        builder.show()
+
+    def _excluded_wifi_menu_subtext(self):
+        rules = self._sanitize_wifi_mode_rules(self._wifi_mode_rules)
+        _, current = self._active_wifi_state()
+        if current and current in rules:
+            return "%d сет. • %s" % (len(rules), self._wifi_rule_mode_title(rules[current]))
+        return "%d сет." % len(rules) if rules else "Не настроено"
+
+    def _create_themed_dialog_input(self, activity, hint=""):
+        try:
+            from org.telegram.ui.Components import EditTextBoldCursor
+            field = EditTextBoldCursor(activity)
+            field.setBackground(None)
+        except:
+            from android.widget import EditText as AndroidEditText
+            field = AndroidEditText(activity)
+        text_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
+        hint_color = Theme.getColor(Theme.key_windowBackgroundWhiteHintText)
+        accent_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+        field.setTextColor(text_color)
+        field.setHintTextColor(hint_color)
+        field.setHint(str(hint or ""))
+        field.setSingleLine(True)
+        field.setPadding(
+            0, AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8),
+        )
+        try:
+            field.setCursorColor(accent_color)
+            field.setLineColors(
+                Theme.getColor(Theme.key_dialogInputField),
+                Theme.getColor(Theme.key_dialogInputFieldActivated),
+                Theme.getColor(Theme.key_text_RedBold),
+            )
+        except:
+            pass
+        layout = LinearLayout(activity)
+        layout.setOrientation(LinearLayout.VERTICAL)
+        layout.setPadding(
+            AndroidUtilities.dp(24), 0,
+            AndroidUtilities.dp(24), AndroidUtilities.dp(8),
+        )
+        layout.addView(field, LinearLayout.LayoutParams(-1, -2))
+        return field, layout
+
+    def _prompt_add_excluded_wifi(self):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return False
+        try:
+            from android.text import InputFilter
+            field, field_view = self._create_themed_dialog_input(activity, "SSID")
+            field.setFilters([InputFilter.LengthFilter(64)])
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Добавить WIFI сеть")
+            builder.set_view(field_view)
+
+            def _save(dlg, which):
+                ssid = self._normalize_wifi_ssid(field.getText())
+                if not ssid:
+                    BulletinHelper.show_error("Укажите SSID сети")
+                    return
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._open_wifi_rule_picker(ssid)
+
+            builder.set_positive_button("Добавить", _save)
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.show()
+            return True
+        except:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return False
+
+    def _open_wifi_rule_picker(self, value):
+        ssid = self._normalize_wifi_ssid(value)
+        if not ssid:
+            return False
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None:
+            return False
+        choices = [("off", "Без прокси")] + list(self._settings_mode_choices())
+        if ssid in self._sanitize_wifi_mode_rules(self._wifi_mode_rules):
+            choices.append(("delete", "Удалить правило"))
+        modes = [mode for mode, label in choices]
+        labels = [label for mode, label in choices]
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(ssid)
+
+        def _select(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                mode = modes[int(which)]
+            except:
+                return
+            if mode == "delete":
+                self._remove_excluded_wifi_ssid(ssid)
+            else:
+                self._set_wifi_rule(ssid, mode)
+
+        builder.set_items(labels, _select)
+        builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+        builder.show()
+        return True
+
+    def _create_excluded_wifi_subpage(self):
+        wifi_active, current = self._active_wifi_state()
+        current_text = current or ("SSID недоступен" if wifi_active else "WIFI не подключён")
+        rules = self._sanitize_wifi_mode_rules(self._wifi_mode_rules)
+        items = [
+            Header(text="Исключённые WIFI сети"),
+            Text(
+                text="Настроить текущую сеть",
+                subtext=current_text,
+                icon="msg_link",
+                on_click=lambda *a: self._add_current_wifi_to_excluded(),
+            ),
+            Text(
+                text="Добавить сеть",
+                icon="msg_link",
+                on_click=lambda *a: self._prompt_add_excluded_wifi(),
+            ),
+            Divider(),
+            Header(text="Сети"),
+        ]
+        if not rules:
+            items.append(Text(text="Список пуст", icon="msg_list"))
+        else:
+            for ssid, mode in rules.items():
+                items.append(Text(
+                    text=ssid,
+                    subtext=self._wifi_rule_mode_title(mode),
+                    icon="msg2_proxy_off" if mode == "off" else self._settings_mode_icon(mode),
+                    on_click=lambda *a, ssid=ssid: self._open_wifi_rule_picker(ssid),
+                ))
+        return items
+
+    def _regenerate_subscription_hwid(self):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return False
+        try:
+            from android.text import InputFilter
+            from android.text.method import DigitsKeyListener
+            field, field_view = self._create_themed_dialog_input(activity, "16 hex-символов")
+            field.setText(_get_or_create_subscription_hwid())
+            field.setSelection(field.length())
+            field.setKeyListener(DigitsKeyListener.getInstance("0123456789abcdefABCDEF"))
+            field.setFilters([InputFilter.LengthFilter(16)])
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Изменить HWID")
+            builder.set_view(field_view)
+
+            def _save(dlg, which):
+                value = str(field.getText() or "").strip().lower()
+                if not _set_subscription_hwid_custom(value):
+                    BulletinHelper.show_error("HWID должен содержать ровно 16 hex-символов")
+                    return
+                self._set_setting_value("subscription_hwid_custom", value, reload_settings=False)
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                BulletinHelper.show_success("HWID подписок обновлён")
+                self._refresh_settings_without_reopen(reload_stack=True)
+
+            builder.set_positive_button("Сохранить", _save)
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.set_cancelable(True)
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("Не удалось изменить HWID: " + str(exc))
+            return False
+
+    def _copy_tgws_voip_relay_link(self):
+        link, error = self._tgws_voip_relay_link()
+        if not link:
+            BulletinHelper.show_error(error)
+            return
+        self._copy_link(link)
+
+    def _reload_settings_ui(self, delay_ms=100):
+        try:
+            if bool(getattr(self, "_reload_ui_pending", False)):
+                return
+            self._reload_ui_pending = True
+        except:
+            pass
+
+        def _run():
+            try:
+                self._reload_ui_pending = False
+            except:
+                pass
+            try:
+                frag = get_last_fragment()
+            except:
+                frag = None
+
+            def _fallback_full_reload():
+                try:
+                    inst = self._plugins_controller_instance()
+                    pid = self._plugin_settings_id()
+                    if inst is not None and pid:
+                        inst.loadPluginSettings(pid)
+                        return
+                except:
+                    pass
+                try:
+                    self._set_setting_value("__reload__", time.time(), reload_settings=True)
+                except:
+                    pass
+
+            if frag is None:
+                return
+
+            try:
+                cls = frag.getClass()
+                frag_name = str(cls.getName() or "")
+            except:
+                cls = None
+                frag_name = ""
+            if frag_name != "com.exteragram.messenger.plugins.ui.PluginSettingsActivity" or cls is None:
+                return
+
+            try:
+                plugin_field = self._settings_java_field(cls, "plugin")
+                plugin_obj = plugin_field.get(frag)
+                frag_pid = str(plugin_obj.getId() or "") if plugin_obj is not None else ""
+            except:
+                frag_pid = ""
+            if frag_pid != str(self._plugin_settings_id() or ""):
+                return
+
+            try:
+                callback_field = self._settings_java_field(cls, "createSubFragmentCallback")
+                callback_obj = callback_field.get(frag)
+            except:
+                callback_obj = None
+
+            if callback_obj is not None:
+                try:
+                    method = self._settings_java_method(cls, "lambda$didReceivedNotification$1")
+                    if method is not None:
+                        method.invoke(frag)
+                        return
+                except:
+                    pass
+
+            try:
+                list_field = self._settings_java_field(cls, "listView")
+                list_view = list_field.get(frag)
+            except:
+                list_view = None
+            if list_view is None:
+                _fallback_full_reload()
+                return
+
+            try:
+                adapter = getattr(list_view, "adapter", None)
+            except:
+                adapter = None
+            if adapter is None:
+                _fallback_full_reload()
+                return
+
+            try:
+                adapter.update(True)
+            except Exception as e:
+                err = ""
+                try:
+                    err = str(e)
+                except:
+                    err = ""
+                if "RecyclerView is computing a layout" in err:
+                    try:
+                        run_on_ui_thread(_run, 300)
+                        return
+                    except:
+                        pass
+                _fallback_full_reload()
+
+        try:
+            run_on_ui_thread(_run, int(delay_ms))
+        except:
+            try:
+                self._reload_ui_pending = False
+            except:
+                pass
+            _run()
+
+    def _reload_settings_stack_ui(self, delay_ms=100):
+        try:
+            if bool(getattr(self, "_reload_stack_ui_pending", False)):
+                return
+            self._reload_stack_ui_pending = True
+        except:
+            pass
+
+        def _run():
+            try:
+                self._reload_stack_ui_pending = False
+            except:
+                pass
+            try:
+                frag = get_last_fragment()
+                stack = frag.getParentLayout().getFragmentStack()
+            except:
+                self._reload_settings_ui()
+                return
+
+            pid = str(self._plugin_settings_id() or "")
+            try:
+                NotificationCenter.getGlobalInstance().postNotificationName(
+                    NotificationCenter.pluginSettingsRegistered,
+                    pid,
+                )
+                return
+            except:
+                pass
+
+            def _reload_fragment(parent):
+                cls = None
+                try:
+                    cls = parent.getClass()
+                    if str(cls.getName() or "") != "com.exteragram.messenger.plugins.ui.PluginSettingsActivity":
+                        return False
+
+                    plugin_field = self._settings_java_field(cls, "plugin")
+                    plugin_obj = plugin_field.get(parent)
+                    if str(plugin_obj.getId() or "") != pid:
+                        return False
+
+                    callback_field = self._settings_java_field(cls, "createSubFragmentCallback")
+                    if callback_field.get(parent) is None:
+                        return False
+                except:
+                    return False
+
+                try:
+                    method = self._settings_java_method(cls, "lambda$didReceivedNotification$1")
+                    if method is not None:
+                        method.invoke(parent)
+                        return True
+                except:
+                    pass
+
+                try:
+                    list_field = self._settings_java_field(cls, "listView")
+                    list_view = list_field.get(parent) if list_field is not None else None
+                    adapter = getattr(list_view, "adapter", None) if list_view is not None else None
+                    if adapter is None:
+                        return False
+                    adapter.update(True)
+                    return True
+                except Exception as e:
+                    err = ""
+                    try:
+                        err = str(e)
+                    except:
+                        err = ""
+                    if "RecyclerView is computing a layout" in err:
+                        try:
+                            run_on_ui_thread(_run, 300)
+                            return True
+                        except:
+                            pass
+                return False
+
+            touched = False
+            try:
+                for index in range(int(stack.size()) - 1, -1, -1):
+                    try:
+                        if _reload_fragment(stack.get(index)):
+                            touched = True
+                    except:
+                        continue
+            except:
+                pass
+
+            if not touched:
+                self._reload_settings_ui()
+
+        try:
+            run_on_ui_thread(_run, int(delay_ms))
+        except:
+            try:
+                self._reload_stack_ui_pending = False
+            except:
+                pass
+            _run()
+
+    def _refresh_settings_without_reopen(self, reload_main=False, reload_stack=False):
+        if reload_stack:
+            self._reload_settings_stack_ui()
+        else:
+            self._reload_settings_ui()
+        if reload_main:
+            run_on_ui_thread(self._refresh_mode_summary)
+
+    def _install_settings_theme_observer(self):
+        if getattr(self, "_settings_theme_observer", None) is not None or dynamic_proxy is None:
+            return
+        try:
+            delegate = find_class("org.telegram.messenger.NotificationCenter$NotificationCenterDelegate")
+            plugin = self
+
+            class _ThemeObserver(dynamic_proxy(delegate)):
+                def didReceivedNotification(self, notification_id, account, *args):
+                    try:
+                        theme_event = getattr(NotificationCenter, "didSetNewTheme", None)
+                        accent_event = getattr(NotificationCenter, "themeAccentColorChanged", None)
+                        if ((theme_event is not None and int(notification_id) == int(theme_event)) or
+                                (accent_event is not None and int(notification_id) == int(accent_event))):
+                            run_on_ui_thread(
+                                lambda: plugin._refresh_settings_without_reopen(reload_main=True, reload_stack=True),
+                                120,
+                            )
+                    except:
+                        pass
+
+            observer = _ThemeObserver()
+            events = []
+            for event_name in ("didSetNewTheme", "themeAccentColorChanged"):
+                try:
+                    event = getattr(NotificationCenter, event_name, None)
+                    if event is None:
+                        continue
+                    NotificationCenter.getGlobalInstance().addObserver(observer, event)
+                    events.append(event)
+                except:
+                    continue
+            self._settings_theme_observer_events = events
+            self._settings_theme_observer = observer
+        except:
+            self._settings_theme_observer = None
+
+    def _remove_settings_theme_observer(self):
+        observer = getattr(self, "_settings_theme_observer", None)
+        self._settings_theme_observer = None
+        if observer is None:
+            return
+        events = list(getattr(self, "_settings_theme_observer_events", []) or [])
+        self._settings_theme_observer_events = []
+        if not events:
+            try:
+                events = [NotificationCenter.didSetNewTheme]
+            except:
+                events = []
+        for event in events:
+            try:
+                NotificationCenter.getGlobalInstance().removeObserver(observer, event)
+            except:
+                pass
+
+    def _copy_active_olcrtc_link(self):
+        link = self._active_olcrtc_link()
+        if not link:
+            BulletinHelper.show_error("Нет olcRTC ссылки")
+            return
+        self._copy_link(link)
+
+    def _confirm_remove_olcrtc_profile(self, profile_id):
+        profile = self._find_olcrtc_profile(profile_id)
+        if not profile:
+            BulletinHelper.show_error("Профиль не найден")
+            return
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if not activity:
+            self._delete_olcrtc_profile(profile_id)
+            return
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Удалить профиль?")
+            builder.set_message(self._olcrtc_profile_name(profile))
+
+            def on_yes(bld, which):
+                try:
+                    bld.dismiss()
+                except:
+                    pass
+                self._delete_olcrtc_profile(profile_id)
+
+            def on_no(bld, which):
+                try:
+                    bld.dismiss()
+                except:
+                    pass
+
+            builder.set_positive_button("Удалить", on_yes)
+            builder.set_negative_button("Отмена", on_no)
+            builder.set_cancelable(True)
+            try:
+                builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+            except:
+                pass
+            builder.show()
+        except:
+            self._delete_olcrtc_profile(profile_id)
+
+    def _create_olcrtc_profiles_subpage(self):
+        self._ensure_olcrtc_legacy_profile()
+        profiles = self._sanitize_olcrtc_profiles(self._olcrtc_profiles)
+        self._olcrtc_profiles = profiles
+        active_id = str(self._olcrtc_active_profile_id or "")
+        transport_choices = self._olcrtc_transport_choices()
+        items = [
+            Header(text="olcRTC профили"),
+            Selector(
+                key="olcrtc_carrier",
+                text="Провайдер",
+                default=self._olcrtc_carrier_index(),
+                items=list(OLCRTC_CARRIER_LABELS),
+                icon="msg_list",
+                on_change=self._on_olcrtc_carrier_changed,
+            ),
+            Selector(
+                key="olcrtc_transport",
+                text="Транспорт",
+                default=self._olcrtc_transport_choice_index(),
+                items=[self._olcrtc_transport_label(value) for value in transport_choices],
+                icon="msg_list",
+                on_change=self._on_olcrtc_transport_changed,
+            ),
+            EditText(
+                key="olcrtc_room_id",
+                hint="room_id",
+                default=self._get_olcrtc_room_id(),
+                multiline=True,
+                max_length=2000,
+            ),
+            EditText(
+                key="olcrtc_key_hex",
+                hint="key_hex",
+                default=self._get_olcrtc_key_hex(),
+                multiline=True,
+                max_length=256,
+            ),
+            Text(text="Импорт из буфера", accent=True, icon="msg_link", on_click=lambda *a: self._import_olcrtc_from_clipboard()),
+        ]
+        if self._get_olcrtc_transport() == "vp8channel":
+            fps, batch = self._get_olcrtc_vp8_options()
+            items[4:4] = [
+                EditText(key="olcrtc_vp8_fps", hint="VP8 FPS (1-120)", default=str(fps), multiline=False, max_length=3),
+                EditText(key="olcrtc_vp8_batch_size", hint="VP8 batch (1-64)", default=str(batch), multiline=False, max_length=2),
+            ]
+        subscription_urls = self._olcrtc_subscription_urls()
+        if subscription_urls:
+            items.append(Text(text="Обновить подписки", icon="msg_retry", on_click=lambda *a: self._refresh_olcrtc_subscriptions(silent=False)))
+            if self._olcrtc_subscriptions_stale():
+                self._refresh_olcrtc_subscriptions(silent=True)
+        active_link = self._active_olcrtc_link()
+        if active_link:
+            items.append(Text(text="Скопировать ссылку", icon="msg_link", on_click=lambda *a: self._copy_active_olcrtc_link()))
+        if profiles:
+            items.append(Divider())
+            items.append(Header(text="Профили"))
+        for profile in profiles:
+            pid = str(profile.get("id", "") or "")
+            label = self._olcrtc_profile_name(profile)
+            subtext = "%s / %s" % (
+                self._olcrtc_carrier_label(profile.get("carrier", "")),
+                self._olcrtc_transport_label(profile.get("transport", "")),
+            )
+            items.append(Text(
+                text=label,
+                subtext=subtext,
+                icon=self._settings_check_icon() if pid == active_id else "msg_link2",
+                accent=bool(pid == active_id),
+                on_click=lambda *a, pid=pid: self._activate_olcrtc_profile(pid, connect=True),
+                on_long_click=lambda view, pid=pid: self._confirm_remove_olcrtc_profile(pid),
+            ))
+        if not profiles:
+            items.append(Divider())
+            items.append(Text(text="Профилей нет", icon="msg_info"))
+        return items
+
+    def _open_awg_file_picker(self):
+        try:
+            Intent = jclass("android.content.Intent") if jclass is not None else find_class("android.content.Intent")
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("*/*")
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            activity = None
+            try:
+                fragment = get_last_fragment()
+                if fragment is not None:
+                    activity = fragment.getParentActivity()
+            except:
+                activity = None
+            if activity is None:
+                try:
+                    AU = find_class("org.telegram.messenger.AndroidUtilities")
+                    activity = AU.getActivity()
+                except:
+                    activity = None
+            if activity is not None:
+                activity.startActivityForResult(intent, int(AWG_FILE_PICKER_REQ))
+            else:
+                BulletinHelper.show_error("Не удалось открыть выбор файла")
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка выбора файла: %s" % str(exc))
+
+    def _confirm_clear_vless_nodes(self):
+        counts = self._vless_counts()
+        if int(counts.get("nodes", 0) or 0) <= 0:
+            BulletinHelper.show_info("Нет узлов")
+            return True
+        fragment = get_last_fragment()
+        activity = None
+        try:
+            if fragment is not None:
+                activity = fragment.getParentActivity()
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return True
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Очистить узлы?")
+        builder.set_message("Все узлы и подписки будут удалены. Действие необратимо.")
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._clear_vless_nodes()
+
+        def _on_no(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+
+        builder.set_positive_button("Очистить", _on_yes)
+        builder.set_negative_button("Отмена", _on_no)
+        try:
+            builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+        except:
+            pass
+        builder.show()
+        return True
+
+    def _confirm_remove_vless_node(self, uri):
+        target_uri = str(uri or "")
+        if not target_uri:
+            return True
+        node = self._find_vless_node(target_uri)
+        if node is None:
+            return True
+
+        fragment = get_last_fragment()
+        activity = None
+        try:
+            if fragment is not None:
+                activity = fragment.getParentActivity()
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return True
+
+        builder = AlertDialogBuilder(activity)
+        try:
+            title = "Удалить %s?" % _proxy_protocol_label(node)
+        except:
+            title = "Удалить узел?"
+        builder.set_title(title)
+        builder.set_message(self._vless_node_label(node))
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._remove_vless_uri(target_uri)
+
+        def _on_no(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+
+        builder.set_positive_button("Удалить", _on_yes)
+        builder.set_negative_button("Отмена", _on_no)
+        try:
+            builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+        except:
+            pass
+        builder.show()
+        return True
+
+    def _open_proxy_import_preview(self, activity, uri, details, initial_status, initial_kind="checking"):
+        try:
+            dp = AndroidUtilities.dp
+            accent = Theme.getColor(Theme.key_featuredStickers_addButton)
+            text_color = Theme.getColor(Theme.key_dialogTextBlack)
+            muted_color = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
+            green_color = Theme.getColor(Theme.key_windowBackgroundWhiteGreenText)
+            red_color = Theme.getColor(Theme.key_text_RedBold)
+
+            container = LinearLayout(activity)
+            container.setOrientation(LinearLayout.VERTICAL)
+            container.setPadding(dp(20), dp(4), dp(20), dp(10))
+
+            protocol = _proxy_protocol_label(details)
+            protocol_chip = TextView(activity)
+            protocol_chip.setText(protocol)
+            protocol_chip.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+            protocol_chip.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
+            protocol_chip.setGravity(Gravity.CENTER)
+            protocol_chip.setPadding(dp(10), dp(4), dp(10), dp(4))
+            try:
+                protocol_chip.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                protocol_chip.setLetterSpacing(0.04)
+            except:
+                pass
+            protocol_bg = GradientDrawable()
+            protocol_bg.setColor(accent)
+            protocol_bg.setCornerRadius(dp(12))
+            protocol_chip.setBackground(protocol_bg)
+            chip_lp = LinearLayout.LayoutParams(-2, -2)
+            chip_lp.bottomMargin = dp(12)
+            container.addView(protocol_chip, chip_lp)
+
+            server = str(details.get("server", "") or "")[:120]
+            port = str(details.get("port", "") or "")[:12]
+            endpoint = TextView(activity)
+            endpoint.setText((server + (":" + port if port else "")) or Z("Адрес не указан"))
+            endpoint.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18)
+            endpoint.setTextColor(text_color)
+            try:
+                endpoint.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+            except:
+                pass
+            endpoint.setSingleLine(True)
+            container.addView(endpoint, LinearLayout.LayoutParams(-1, -2))
+
+            network = str(details.get("network", "tcp") or "tcp")
+            security = str(details.get("security", "none") or "none")
+            meta = TextView(activity)
+            meta.setText(Z("Транспорт") + ": " + network + "  •  " + Z("Безопасность") + ": " + security)
+            meta.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
+            meta.setTextColor(muted_color)
+            meta_lp = LinearLayout.LayoutParams(-1, -2)
+            meta_lp.topMargin = dp(5)
+            container.addView(meta, meta_lp)
+
+            params = dict(details.get("params", {}) or {})
+            route_parts = []
+            for label, value in (
+                ("SNI", params.get("sni", "")),
+                ("Host", params.get("host", "")),
+                ("Path", params.get("path", "")),
+            ):
+                value = str(value or "").strip()
+                if value:
+                    route_parts.append(label + ": " + value[:96])
+            if route_parts:
+                route = TextView(activity)
+                route.setText("\n".join(route_parts))
+                route.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
+                route.setTextColor(muted_color)
+                route_lp = LinearLayout.LayoutParams(-1, -2)
+                route_lp.topMargin = dp(10)
+                container.addView(route, route_lp)
+
+            status = TextView(activity)
+            status.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14)
+            status.setPadding(dp(12), dp(9), dp(12), dp(9))
+            try:
+                status.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+            except:
+                pass
+            status_lp = LinearLayout.LayoutParams(-1, -2)
+            status_lp.topMargin = dp(16)
+            container.addView(status, status_lp)
+
+            def _update_status(status_text, kind="checking"):
+                color = green_color if kind == "ok" else red_color if kind == "error" else accent
+                status.setText(Z(str(status_text or "")))
+                status.setTextColor(color)
+                status_bg = GradientDrawable()
+                status_bg.setColor(Theme.getColor(Theme.key_dialogBackground))
+                status_bg.setCornerRadius(dp(14))
+                status_bg.setStroke(dp(1), color)
+                status.setBackground(status_bg)
+
+            _update_status(initial_status, initial_kind)
+
+            dialog = AlertDialogBuilder(activity)
+            dialog.set_title(str(details.get("name", protocol) or protocol)[:80])
+            dialog.set_view(container)
+
+            def _connect(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._activate_vless_uri(uri, enable_plugin=True)
+
+            dialog.set_positive_button("Подключить", _connect)
+            dialog.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            dialog.set_cancelable(True)
+            dialog.show()
+            return dialog, _update_status
+        except Exception:
+            return None, None
+
+    def _open_core_download_progress(self):
+        activity = self._current_activity()
+        if activity is None:
+            return None, lambda *_args: None
+        try:
+            container = LinearLayout(activity)
+            container.setOrientation(LinearLayout.VERTICAL)
+            padding = AndroidUtilities.dp(20)
+            container.setPadding(padding, AndroidUtilities.dp(8), padding, AndroidUtilities.dp(12))
+
+            label = TextView(activity)
+            label.setText("%s • 0%%" % Z("Подготовка"))
+            label.setTextSize(16)
+            try:
+                label.setTextColor(Theme.getColor(Theme.key_dialogTextBlack))
+            except:
+                pass
+
+            progress = LineProgressView(activity)
+            try:
+                progress.setProgressColor(Theme.getColor(Theme.key_featuredStickers_addButton))
+                progress.setBackColor(Theme.getColor(Theme.key_dialogLineProgressBackground))
+            except:
+                pass
+            progress.setProgress(0.0, False)
+
+            text_lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            bar_lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, AndroidUtilities.dp(6))
+            bar_lp.setMargins(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(8))
+            container.addView(label, text_lp)
+            container.addView(progress, bar_lp)
+
+            dialog = AlertDialogBuilder(activity, _AlertDialogBuilder.ALERT_TYPE_MESSAGE)
+            dialog.set_title("Ядро GreenPass")
+            dialog.set_view(container)
+            dialog.set_cancelable(False)
+            dialog.show()
+
+            def _update(value, stage="Скачивание"):
+                value = max(0.0, min(1.0, float(value)))
+                def _ui():
+                    label.setText("%s • %d%%" % (Z(stage), int(value * 100)))
+                    progress.setProgress(value, True)
+                run_on_ui_thread(_ui)
+
+            return dialog, _update
+        except:
+            return None, lambda *_args: None
+
+    def _confirm_delete_vless_addon(self):
+        if not self._has_libvless_addon():
+            BulletinHelper.show_info("Ядро не установлено")
+            return True
+        fragment = get_last_fragment()
+        activity = None
+        try:
+            if fragment is not None:
+                activity = fragment.getParentActivity()
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return True
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Удалить ядро?")
+        builder.set_message("Файл ядра прокси будет удалён. Его можно скачать снова.")
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._delete_vless_addon()
+
+        def _on_no(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+
+        builder.set_positive_button("Удалить", _on_yes)
+        builder.set_negative_button("Отмена", _on_no)
+        try:
+            builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+        except:
+            pass
+        builder.show()
+        return True
+
+    def _open_plugin_settings(self, context):
+        def _run():
+            try:
+                primary_id = str(self._plugin_settings_id() or "")
+            except:
+                primary_id = str(getattr(self, "id", "") or "")
+            plugin_ids = []
+            for candidate in (primary_id, str(getattr(self, "id", "") or ""), "GreenPass", "greenpass"):
+                if candidate and candidate not in plugin_ids:
+                    plugin_ids.append(candidate)
+            try:
+                PC = find_class("com.exteragram.messenger.plugins.PluginsController")
+            except:
+                PC = None
+            try:
+                PSA = find_class("com.exteragram.messenger.plugins.ui.PluginSettingsActivity")
+            except:
+                PSA = None
+
+            try:
+                if PC:
+                    inst = None
+                    try:
+                        inst = PC.getInstance()
+                    except:
+                        inst = None
+                    if inst is not None and hasattr(inst, "plugins") and PSA:
+                        plugin_obj = None
+                        for pid in plugin_ids:
+                            try:
+                                plugin_obj = inst.plugins.get(pid)
+                            except:
+                                plugin_obj = None
+                            if plugin_obj is not None:
+                                break
+                        if plugin_obj is not None:
+                            frag = get_last_fragment()
+                            if frag is not None:
+                                frag.presentFragment(PSA(plugin_obj))
+                                return
+
+                    for x in plugin_ids:
+                        try:
+                            r = PC.openPluginSettings(x)
+                            if bool(r):
+                                return
+                        except:
+                            pass
+            except:
+                pass
+
+            try:
+                frag = get_last_fragment()
+                if frag and PC:
+                    PC.getInstance().openPluginSettings(primary_id, frag)
+                    return
+            except:
+                pass
+
+        try:
+            run_on_ui_thread(_run)
+        except:
+            _run()
+
+    def _get_clipboard_text(self):
+        try:
+            from android.content import Context
+            ctx = ApplicationLoader.applicationContext
+            clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+            if clipboard is None:
+                return ""
+            clip = clipboard.getPrimaryClip()
+            if clip is None or clip.getItemCount() <= 0:
+                return ""
+            return str(clip.getItemAt(0).coerceToText(ctx) or "")[:VLESS_IMPORT_CLIPBOARD_MAX]
+        except:
+            return ""
+
+    def _confirm_olcrtc_link(self, data, uri):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть подтверждение")
+            return False
+        try:
+            carrier = str(data.get("carrier", "") or "").strip().lower() or self._get_olcrtc_carrier()
+            transport = str(data.get("transport", "") or "").strip().lower() or self._get_olcrtc_transport()
+            room_id = str(data.get("room_id", "") or "").strip()
+            client_id = str(data.get("client_id", "") or "").strip()
+            key_hex = str(data.get("key_hex", "") or "").strip()
+            key_mask = key_hex[:6] + "..." + key_hex[-6:] if len(key_hex) > 12 else "***"
+            message = "\n".join([
+                "Подключиться к olcRTC?",
+                "",
+                "Провайдер: %s" % self._olcrtc_carrier_label(carrier),
+                "Транспорт: %s" % self._olcrtc_transport_label(transport),
+                "Комната: %s" % (room_id[:120] if room_id else "—"),
+                "Клиент: %s" % (client_id[:80] if client_id else "—"),
+                "Ключ: %s" % key_mask,
+            ])
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Подключение olcRTC")
+            builder.set_message(message)
+
+            def on_yes(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._apply_olcrtc_import_data(data, connect=True, imported_link=str(uri or ""))
+
+            def on_no(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+
+            builder.set_positive_button("Подключить", on_yes)
+            builder.set_negative_button("Отмена", on_no)
+            builder.set_cancelable(True)
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("olcRTC: %s" % str(exc))
+            return False
+
+    def _confirm_tgws_link(self, uri="tg://ws"):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть подтверждение")
+            return False
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Подключение TG WS")
+            builder.set_message("Включить режим TG WS и применить локальный прокси Telegram?")
+
+            def on_yes(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._handle_tgws_link(uri, confirm=False)
+
+            def on_no(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+
+            builder.set_positive_button("Подключить", on_yes)
+            builder.set_negative_button("Отмена", on_no)
+            builder.set_cancelable(True)
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("TG WS: %s" % str(exc))
+            return False
+
+    def _confirm_qwdtt_link(self, profile, uri):
+        try:
+            fragment = get_last_fragment()
+            activity = fragment.getParentActivity() if fragment else None
+        except:
+            activity = None
+        if activity is None or not isinstance(profile, dict):
+            BulletinHelper.show_error("Не удалось открыть qWDTT")
+            return False
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Подключение qWDTT")
+            builder.set_message("\n".join([
+                "Профиль: %s" % str(profile.get("name", "qWDTT") or "qWDTT")[:80],
+                "Сервер: %s" % str(profile.get("peer", "") or "")[:120],
+                "VK-хешей: %d" % len(list(profile.get("hashes", []) or [])),
+            ]))
+
+            def on_yes(dlg, which):
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                saved = self._save_qwdtt_profile(profile, activate=True)
+                if saved:
+                    self._switch_to_vless_mode()
+
+            builder.set_positive_button("Подключить", on_yes)
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.set_cancelable(True)
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("qWDTT: %s" % str(exc))
+            return False
+
+    def _custom_proxy_label(self, node=None):
+        target = node
+        if target is None:
+            try:
+                target = self._current_vless_node()
+            except:
+                target = None
+        try:
+            kind = str((target or {}).get("kind", "") or "").strip().lower()
+        except:
+            kind = ""
+        if not kind and target is not None:
+            try:
+                kind = _proxy_uri_scheme((target or {}).get("uri", ""))
+            except:
+                kind = ""
+        return _proxy_protocol_label(kind)
+
+    def _select_mode_from_settings(self, mode):
+        target = str(mode or VLESS_KIND)
+        if target not in (VLESS_KIND, TGWS_KIND, AWG_KIND, OLCRTC_KIND):
+            target = VLESS_KIND
+        if target == self._get_connection_mode() and self._is_plugin_proxy_enabled():
+            self._refresh_mode_summary()
+            self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
+            return True
+        _switch = {
+            VLESS_KIND: self._switch_to_vless_mode,
+            TGWS_KIND: self._switch_to_tgws_mode,
+            AWG_KIND: self._switch_to_awg_mode,
+            OLCRTC_KIND: self._switch_to_olcrtc_mode,
+        }[target]
+        self._set_connection_mode(target)
+        self._enable_plugin_proxy_flag()
+        self._refresh_mode_summary()
+        self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
+        try:
+            threading.Thread(target=lambda: _switch(False), daemon=True).start()
+        except:
+            _switch(False)
+        return True
+
+    def _confirm_remove_vless_subscription(self, url):
+        target = str(url or "").strip()
+        sub = self._find_vless_subscription(target)
+        if sub is None:
+            return True
+
+        fragment = get_last_fragment()
+        activity = None
+        try:
+            if fragment is not None:
+                activity = fragment.getParentActivity()
+        except:
+            activity = None
+
+        if activity is None:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return True
+
+        try:
+            title = str(sub.get("name", "Подписка") or "Подписка")
+        except:
+            title = "Подписка"
+        count = len(list(sub.get("nodes", []) or []))
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title("Удалить подписку?")
+        builder.set_message(f"{title}\n{count} узл.")
+
+        def _on_yes(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            self._delete_vless_subscription(target)
+
+        def _on_no(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+
+        builder.set_positive_button("Удалить", _on_yes)
+        builder.set_negative_button("Отмена", _on_no)
+        try:
+            builder.make_button_red(AlertDialogBuilder.BUTTON_POSITIVE)
+        except:
+            pass
+        builder.show()
+        return True
+
+    # ExitFy keeps a large node list usable with search, protocol filters and
+    # pagination.  Keep the same UX locally; the query is intentionally
+    # transient so opening the page never mutates the user's proxy config.
+    def _vless_browser_query_value(self):
+        try:
+            return str(getattr(self, "_vless_browser_query", "") or "").strip()[:80]
+        except:
+            return ""
+
+    def _vless_browser_protocol_value(self):
+        try:
+            value = str(getattr(self, "_vless_browser_protocol", "") or "").strip().lower()
+            return self._vless_browser_normalize_protocol(value)
+        except:
+            return ""
+
+    def _ui_filter_vless_browser_nodes(self, nodes):
+        query = self._vless_browser_query_value().lower()
+        protocol = self._vless_browser_protocol_value()
+        result = []
+        for node in list(nodes or []):
+            if not isinstance(node, dict):
+                continue
+            try:
+                uri = str(node.get("uri", "") or "")
+                kind = str(node.get("kind", "") or "").strip().lower() or _proxy_uri_scheme(uri)
+                try:
+                    kind = self._vless_browser_normalize_protocol(kind)
+                except:
+                    pass
+                name = str(node.get("name", "") or "")
+                server = str(node.get("server", "") or "")
+                haystack = " ".join((name, server, kind, uri)).lower()
+                if query and query not in haystack:
+                    continue
+                if protocol and kind != protocol:
+                    continue
+            except:
+                continue
+            result.append(node)
+        return result
+
+    def _vless_browser_protocol_choices(self, nodes):
+        values = set()
+        for node in list(nodes or []):
+            try:
+                uri = str(node.get("uri", "") or "")
+                kind = str(node.get("kind", "") or "").strip().lower() or _proxy_uri_scheme(uri)
+                try:
+                    kind = self._vless_browser_normalize_protocol(kind)
+                except:
+                    pass
+                if kind:
+                    values.add(kind)
+            except:
+                continue
+        choices = [("", "Все протоколы")]
+        for value in sorted(values):
+            choices.append((value, _proxy_protocol_label(value) or value.upper()))
+        return choices
+
+    def _vless_browser_protocol_label(self, nodes):
+        selected = self._vless_browser_protocol_value()
+        if not selected:
+            return "Все протоколы"
+        for value, label in self._vless_browser_protocol_choices(nodes):
+            if value == selected:
+                return label
+        return "Все протоколы"
+
+    def _open_vless_browser_search(self):
+        activity = self._current_activity()
+        if activity is None:
+            return False
+        try:
+            field, field_view = self._create_themed_dialog_input(activity, "Имя, адрес или протокол")
+            current = self._vless_browser_query_value()
+            if current:
+                field.setText(current)
+                field.setSelection(field.length())
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Поиск серверов")
+            builder.set_view(field_view)
+
+            def _save(dlg, which):
+                self._vless_browser_query = str(field.getText() or "").strip()[:80]
+                self._vless_browser_page = 0
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._refresh_settings_without_reopen(reload_stack=True)
+
+            def _clear(dlg, which):
+                self._vless_browser_query = ""
+                self._vless_browser_page = 0
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._refresh_settings_without_reopen(reload_stack=True)
+
+            builder.set_positive_button("Применить", _save)
+            builder.set_neutral_button("Очистить", _clear)
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.set_cancelable(True)
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("Поиск: " + str(exc))
+            return False
+
+    def _open_vless_browser_filter(self, nodes):
+        activity = self._current_activity()
+        if activity is None:
+            return False
+        choices = self._vless_browser_protocol_choices(nodes)
+        labels = []
+        selected = self._vless_browser_protocol_value()
+        for value, label in choices:
+            labels.append(("✓ " if value == selected else "") + label)
+        values = [value for value, _label in choices]
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Фильтр протокола")
+
+            def _select(dlg, which):
+                try:
+                    self._vless_browser_protocol = values[int(which)]
+                except:
+                    return
+                self._vless_browser_page = 0
+                try:
+                    dlg.dismiss()
+                except:
+                    pass
+                self._refresh_settings_without_reopen(reload_stack=True)
+
+            builder.set_items(labels, _select)
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("Фильтр: " + str(exc))
+            return False
+
+    def _vless_browser_page_slice(self, nodes):
+        nodes = list(nodes or [])
+        # Keep the page size in one place so the selector and fallback agree.
+        page_size = self._vless_browser_page_size_value()
+        page_count = max(1, (len(nodes) + page_size - 1) // page_size)
+        try:
+            page = int(getattr(self, "_vless_browser_page", 0) or 0)
+        except:
+            page = 0
+        page = max(0, min(page, page_count - 1))
+        self._vless_browser_page = page
+        start = page * page_size
+        return nodes[start:start + page_size], page, page_count
+
+    def _set_vless_browser_page(self, page):
+        try:
+            self._vless_browser_page = max(0, int(page))
+        except:
+            self._vless_browser_page = 0
+        self._refresh_settings_without_reopen(reload_stack=True)
+
+    def _vless_browser_page_size_value(self):
+        try:
+            return int(self._vless_browser_page_size())
+        except:
+            return 20
+
+    def _vless_browser_page_size_index(self):
+        values = (10, 20, 40, 60)
+        value = self._vless_browser_page_size_value()
+        try:
+            return values.index(value)
+        except:
+            return min(range(len(values)), key=lambda index: abs(values[index] - value))
+
+    def _on_vless_browser_page_size_changed(self, index):
+        values = (10, 20, 40, 60)
+        try:
+            value = values[max(0, min(len(values) - 1, int(index)))]
+        except:
+            value = 20
+        try:
+            self._set_vless_browser_page_size(value)
+        except:
+            pass
+        self._vless_browser_page = 0
+        self._refresh_settings_without_reopen(reload_stack=True)
+        return True
+
+    def _on_vless_browser_auto_check_changed(self, index):
+        values = (0, 5, 15, 30, 60)
+        try:
+            value = values[max(0, min(len(values) - 1, int(index)))]
+        except:
+            value = 0
+        try:
+            self._set_vless_browser_auto_check_minutes(value)
+        except:
+            pass
+        self._refresh_settings_without_reopen(reload_stack=True)
+        return True
+
+    def _vless_browser_auto_check_index(self):
+        values = (0, 5, 15, 30, 60)
+        try:
+            value = int(self._vless_browser_auto_check_minutes())
+        except:
+            value = 0
+        try:
+            return values.index(value)
+        except:
+            return 0
+
+    def _on_vless_browser_failover_changed(self, enabled):
+        try:
+            self._set_vless_browser_failover_enabled(bool(enabled))
+        except:
+            pass
+        self._refresh_settings_without_reopen(reload_stack=True)
+        return True
+
+    def _toggle_vless_browser_source(self, key, currently_hidden):
+        try:
+            self._vless_set_browser_source_visible(key, bool(currently_hidden))
+        except:
+            return False
+        self._vless_browser_page = 0
+        self._refresh_settings_without_reopen(reload_stack=True)
+        return True
+
+    def _create_vless_sources_subpage(self):
+        try:
+            sources = list(self._vless_browser_sources(include_hidden=True) or [])
+        except:
+            sources = []
+        items = [
+            Header(text="Источники узлов"),
+            Text(
+                text="Показывать узлы источника",
+                subtext="Скрытые источники не участвуют в автовыборе",
+                icon="msg_info",
+            ),
+        ]
+        if not sources:
+            items.append(Text(text="Источники не найдены", icon="msg_info"))
+            return items
+        items.append(Divider())
+        for source in sources:
+            key = str(source.get("key", "") or "")
+            name = str(source.get("name", "") or key or "Источник")[:64]
+            hidden = bool(source.get("hidden", False))
+            count = int(source.get("count", 0) or 0)
+            items.append(Text(
+                text=name,
+                subtext=("Скрыт" if hidden else "Виден") + " • %d узл." % count,
+                icon="msg2_proxy_off" if hidden else "msg2_proxy_on",
+                accent=not hidden,
+                on_click=lambda *a, key=key, hidden=hidden: self._toggle_vless_browser_source(key, hidden),
+            ))
+        return items
+
+    def _vless_node_source_label(self, node):
+        target = str((node or {}).get("uri", "") or "")
+        if not target:
+            return "Свой узел"
+        try:
+            source = self._vless_browser_source_for_node(node)
+            source_name = str((source or {}).get("name", "") or "").strip()
+            if source_name and not bool((source or {}).get("manual", False)):
+                return source_name[:48]
+        except:
+            pass
+        try:
+            for sub in list(self._vless_data.get("subs", []) or []):
+                if not isinstance(sub, dict):
+                    continue
+                for item in list(sub.get("nodes", []) or []):
+                    if str((item or {}).get("uri", "") or "") == target:
+                        return str(sub.get("name", "") or "Подписка").strip()[:48] or "Подписка"
+        except:
+            pass
+        return "Свой узел"
+
+    def _vless_browser_row_subtext(self, node):
+        try:
+            kind = str(node.get("kind", "") or "").strip().lower() or _proxy_uri_scheme(node.get("uri", ""))
+            protocol = _proxy_protocol_label(kind) or kind.upper()
+            source = self._vless_node_source_label(node)
+            server = str(node.get("server", "") or "").strip()
+            port = str(node.get("port", "") or "").strip()
+            endpoint = server + ((":" + port) if server and port else "")
+            parts = [protocol, source]
+            if endpoint:
+                parts.append(endpoint[:72])
+            return " • ".join(part for part in parts if part)
+        except:
+            return ""
+
+    def _create_vless_subscription_subpage(self, sub_url):
+        sub = self._find_vless_subscription(sub_url)
+        if sub is None:
+            return [Header(text="Подписка"), Text(text="Подписка не найдена", icon="msg_info")]
+
+        try:
+            title = str(sub.get("name", "Подписка") or "Подписка").strip()
+        except:
+            title = "Подписка"
+        title = title if title else "Подписка"
+        nodes = self._sorted_vless_nodes(list(sub.get("nodes", []) or []))
+        active = bool(self._vless_subscription_has_active(sub))
+
+        items = [
+            Header(text="Подписка"),
+            Text(
+                text=title,
+                subtext=("Активная • " if active else "") + f"{len(nodes)} узл.",
+                icon="msg_channel",
+                accent=active,
+            ),
+            Divider(),
+            Header(text="Действия"),
+            Text(
+                text="Обновить подписку",
+                subtext="Загрузить свежий список узлов",
+                icon="msg_retry",
+                on_click=lambda *a, url=str(sub.get("url", "") or ""): self._update_vless_subscription(url),
+            ),
+        ]
+        if nodes:
+            items.append(Text(
+                text="Тест пинга",
+                subtext="Проверить узлы этой подписки",
+                icon="msg_speed",
+                on_click=lambda *a, nodes=nodes: self._run_vless_ping_test(nodes=nodes, refresh_each=True),
+            ))
+
+        active_uri = self._get_active_vless_uri()
+        items.extend([Divider(), Header(text="Узлы")])
+        for node in nodes:
+            selected = str(node.get("uri", "") or "") == active_uri
+            items.append(Text(
+                text=self._vless_node_plain_label(node),
+                subtext=self._vless_browser_row_subtext(node),
+                icon=self._settings_check_icon() if selected else "msg_link2",
+                accent=selected,
+                on_click=lambda *a, uri=str(node.get("uri", "") or ""): self._activate_vless_uri(uri, enable_plugin=True),
+                on_long_click=lambda view, uri=str(node.get("uri", "") or ""): self._confirm_remove_vless_node(uri),
+            ))
+
+        if not nodes:
+            items.append(Text(
+                text="Подписка пуста",
+                subtext="Обновите подписку или проверьте её адрес",
+                icon="msg_info",
+            ))
+        items.extend([
+            Divider(),
+            Header(text="Управление"),
+            Text(
+                text="Удалить подписку",
+                subtext="Узлы из неё также будут удалены",
+                red=True,
+                icon="msg_delete",
+                on_click=lambda *a, url=str(sub.get("url", "") or ""): self._confirm_remove_vless_subscription(url),
+            ),
+        ])
+        return items
+
+    def _create_vless_nodes_subpage(self):
+        current = self._current_vless_node()
+        manual = list(self._vless_data.get("manual", []) or [])
+        subs = list(self._vless_data.get("subs", []) or [])
+        counts = self._vless_counts()
+        nodes_count = int(counts.get("nodes", 0) or 0)
+        subs_count = int(counts.get("subs", 0) or 0)
+        active_uri = self._get_active_vless_uri()
+        auto_node = self._find_vless_node(VLESS_AUTO_SUBSCRIPTIONS_URI)
+
+        items = [
+            Header(text="Обзор"),
+            Text(
+                text="Узлы и подписки",
+                subtext=f"Узлов: {nodes_count} • подписок: {subs_count}",
+                icon="msg_folders",
+            ),
+        ]
+
+        if current:
+            current_link = str(current.get("uri", "") or "")
+            items.append(Text(
+                text="Текущий узел",
+                subtext=self._append_green_tail(self._vless_node_plain_label(current), self._vless_ping_badge(current)),
+                icon="msg2_proxy_on",
+                accent=True,
+                on_long_click=(lambda view, link=current_link: self._copy_link(link)) if _is_proxy_uri(current_link) else None,
+            ))
+        else:
+            items.append(Text(
+                text="Узел не выбран",
+                subtext="Выберите сервер ниже или добавьте из буфера",
+                icon="msg2_proxy_off",
+            ))
+
+        if subs:
+            items.extend([Divider(), Header(text="Подписки")])
+            for sub in subs:
+                sub_nodes = list(sub.get("nodes", []) or [])
+                active = bool(self._vless_subscription_has_active(sub))
+                items.append(Text(
+                    text=str(sub.get("name", "Подписка") or "Подписка"),
+                    subtext=("Активная • " if active else "") + f"{len(sub_nodes)} узл.",
+                    icon="msg_list",
+                    accent=active,
+                    create_sub_fragment=lambda sub_url=str(sub.get("url", "") or ""): self._create_vless_subscription_subpage(sub_url),
+                    on_long_click=lambda view, url=str(sub.get("url", "") or ""): self._confirm_remove_vless_subscription(url),
+                ))
+
+        # Unified server browser (search/filter/pagination) keeps large
+        # subscriptions usable while retaining the separate subscription rows
+        # above for refresh/delete actions.
+        all_nodes = []
+        seen_uris = set()
+        for source_nodes in [manual] + [list(sub.get("nodes", []) or []) for sub in subs if isinstance(sub, dict)]:
+            for node in source_nodes:
+                if not isinstance(node, dict):
+                    continue
+                uri = str(node.get("uri", "") or "").strip()
+                if not uri or uri in seen_uris:
+                    continue
+                seen_uris.add(uri)
+                all_nodes.append(node)
+        if all_nodes:
+            query = self._vless_browser_query_value()
+            protocol = self._vless_browser_protocol_value()
+            try:
+                snapshot = self._vless_browser_snapshot(
+                    query=query,
+                    protocol=protocol,
+                    page=int(getattr(self, "_vless_browser_page", 0) or 0),
+                )
+                browser_nodes = list(snapshot.get("nodes", []) or [])
+                browser_total = int(snapshot.get("total", 0) or 0)
+                page = int(snapshot.get("page", 0) or 0)
+                page_size = int(snapshot.get("page_size", 20) or 20)
+                page_count = int(snapshot.get("pages", 0) or 0)
+                self._vless_browser_page = page
+            except:
+                filtered = self._sorted_vless_nodes(self._ui_filter_vless_browser_nodes(all_nodes))
+                browser_nodes, page, page_count = self._vless_browser_page_slice(filtered)
+                browser_total = len(filtered)
+                page_size = self._vless_browser_page_size_value()
+            filter_label = self._vless_browser_protocol_label(all_nodes)
+            items.extend([Divider(), Header(text="Серверы")])
+            items.append(Text(
+                text="Поиск серверов" if not query else "Поиск: " + query,
+                subtext="Имя, адрес или протокол" if not query else "%d совпадений" % browser_total,
+                icon="msg_search",
+                on_click=lambda *a: self._open_vless_browser_search(),
+            ))
+            items.append(Text(
+                text="Фильтр протокола",
+                subtext=filter_label,
+                icon="msg_list",
+                on_click=lambda *a, source=all_nodes: self._open_vless_browser_filter(source),
+            ))
+            try:
+                source_count = len(list(self._vless_browser_sources(include_hidden=True) or []))
+            except:
+                source_count = 0
+            if source_count:
+                items.append(Text(
+                    text="Источники",
+                    subtext="%d источника" % source_count,
+                    icon="msg_channel",
+                    create_sub_fragment=self._create_vless_sources_subpage,
+                ))
+            items.append(Selector(
+                key="vless_browser_page_size",
+                text="Серверов на странице",
+                default=self._vless_browser_page_size_index(),
+                items=["10", "20", "40", "60"],
+                icon="msg_list",
+                on_change=self._on_vless_browser_page_size_changed,
+            ))
+            if not browser_nodes:
+                items.append(Text(
+                    text="Ничего не найдено",
+                    subtext="Измените запрос или фильтр",
+                    icon="msg_info",
+                ))
+            else:
+                first = page * page_size + 1
+                last = first + len(browser_nodes) - 1
+                items.append(Text(
+                    text="Серверы %d–%d из %d" % (first, last, browser_total),
+                    subtext="Нажмите на сервер для подключения",
+                    icon="msg_list",
+                ))
+                for node in browser_nodes:
+                    selected = str(node.get("uri", "") or "") == active_uri
+                    items.append(Text(
+                        text=self._vless_node_plain_label(node),
+                        subtext=self._vless_browser_row_subtext(node),
+                        icon=self._settings_check_icon() if selected else "msg_link2",
+                        accent=selected,
+                        on_click=lambda *a, uri=str(node.get("uri", "") or ""): self._activate_vless_uri(uri, enable_plugin=True),
+                        on_long_click=lambda view, uri=str(node.get("uri", "") or ""): self._confirm_remove_vless_node(uri),
+                    ))
+                if page_count > 1:
+                    if page > 0:
+                        items.append(Text(
+                            text="Предыдущая страница",
+                            icon="msg_retry",
+                            on_click=lambda *a, target=page - 1: self._set_vless_browser_page(target),
+                        ))
+                    if page + 1 < page_count:
+                        items.append(Text(
+                            text="Следующая страница",
+                            icon="msg_forward",
+                            on_click=lambda *a, target=page + 1: self._set_vless_browser_page(target),
+                        ))
+
+        if not manual and not subs:
+            items.extend([
+                Divider(),
+                Text(
+                    text="Пока нет узлов",
+                    subtext="Добавьте сервер или подписку",
+                    icon="msg_info",
+                ),
+            ])
+
+        if nodes_count > 0 or subs_count > 0:
+            items.extend([Divider(), Header(text="Обслуживание")])
+        if nodes_count > 0:
+            items.append(Text(
+                text="Тест пинга",
+                subtext="Проверить задержку всех узлов",
+                icon="msg_speed",
+                on_click=lambda *a: self._run_vless_ping_test(),
+            ))
+        if subs_count > 0:
+            items.append(Text(
+                text="Обновить подписки",
+                subtext="Загрузить свежие списки узлов",
+                icon="msg_retry",
+                on_click=lambda *a: self._refresh_vless_subscriptions(),
+            ))
+        if nodes_count > 0 or subs_count > 0:
+            items.append(Text(
+                text="Очистить узлы",
+                subtext="Удалить свои узлы и подписки",
+                icon="msg_delete",
+                red=True,
+                on_click=lambda *a: self._confirm_clear_vless_nodes(),
+            ))
+
+        return items
+
+    def _settings_mode_choices(self):
+        return [
+            (VLESS_KIND, self._settings_mode_title(VLESS_KIND)),
+            (TGWS_KIND, "TG WS"),
+            (AWG_KIND, "AmneziaWG"),
+            (OLCRTC_KIND, "olcRTC"),
+        ]
+
+    def _settings_mode_title(self, mode):
+        target = str(mode or VLESS_KIND)
+        if target == VLESS_KIND:
+            return "Mihomo" if self._effective_vless_engine() == VLESS_ENGINE_MIHOMO else "sing-box"
+        if target == TGWS_KIND:
+            return "TG WS"
+        if target == AWG_KIND:
+            return "AmneziaWG"
+        if target == OLCRTC_KIND:
+            return "olcRTC"
+        return self._settings_mode_title(VLESS_KIND)
+
+    def _settings_mode_description(self, mode):
+        target = str(mode or VLESS_KIND)
+        if target == VLESS_KIND:
+            return "Узлы, подписки и автоматический выбор"
+        if target == TGWS_KIND:
+            return "WebSocket-прокси для Telegram"
+        if target == AWG_KIND:
+            return "Туннель AmneziaWG из .conf"
+        if target == OLCRTC_KIND:
+            return "TURN/WebRTC-профили и подписки"
+        return self._settings_mode_description(VLESS_KIND)
+
+    def _settings_check_icon(self):
+        try:
+            cached = getattr(self, "_cached_check_icon", None)
+            if cached:
+                return cached
+            fragment = get_last_fragment()
+            context = fragment.getParentActivity() if fragment else None
+            if context is not None:
+                res = context.getResources()
+                pkg = context.getPackageName()
+                for name in (
+                    "ic_ab_done",
+                    "menu_done",
+                    "check",
+                    "calls_quality_good",
+                    "msg_check_s",
+                    "outline_shield_check",
+                    "msg2_proxy_on",
+                ):
+                    try:
+                        if int(res.getIdentifier(name, "drawable", pkg) or 0) > 0:
+                            self._cached_check_icon = name
+                            return name
+                    except:
+                        pass
+        except:
+            pass
+        return "ic_ab_done"
+
+    def _settings_mode_icon(self, mode):
+        target = str(mode or VLESS_KIND)
+        if target == VLESS_KIND:
+            return "msg_send"
+        if target == TGWS_KIND:
+            return "msg_link2"
+        if target == AWG_KIND:
+            return "msg_secret"
+        if target == OLCRTC_KIND:
+            return "msg_calls"
+        return "msg_send"
+
+    def _settings_mode_runtime_state(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        if target != self._get_connection_mode() or not bool(self._is_plugin_proxy_enabled()):
+            return "off"
+        if bool(getattr(self, "_proxy_suspended_by_wifi", False)) or bool(getattr(self, "_proxy_suspended_by_vpn", False)):
+            return "paused"
+
+        try:
+            owner, owner_port = self._local_socks_owner_snapshot()
+        except:
+            owner, owner_port = "", 0
+
+        ready = False
+        busy = False
+        if target == VLESS_KIND:
+            try:
+                port = int(self._vless_port or (owner_port if owner == VLESS_KIND else 0) or 0)
+            except:
+                port = 0
+            try:
+                ready = bool(port > 0 and self._is_local_vless_proxy_applied(port))
+            except:
+                ready = False
+            busy = bool(getattr(self, "_vless_connecting", False)) or bool(getattr(self, "_vless_prepare_in_progress", False)) or (bool(getattr(self, "_vless_running", False)) and not ready)
+        elif target == TGWS_KIND:
+            try:
+                port = int(self._tgws_port or (owner_port if owner == TGWS_KIND else 0) or 0)
+            except:
+                port = 0
+            try:
+                local_ready = bool(port > 0 and self._is_local_tgws_proxy_applied(port))
+                ready = bool(local_ready and self._tgws_telegram_is_connected())
+            except:
+                ready = False
+                local_ready = False
+            busy = (
+                bool(getattr(self, "_tgws_connecting", False))
+                or (bool(getattr(self, "_tgws_running", False)) and not local_ready)
+                or (local_ready and not ready)
+            )
+        elif target == AWG_KIND:
+            ready = bool(self._is_awg_connection_ready())
+            busy = (
+                bool(getattr(self, "_awg_connecting", False))
+                or bool(getattr(self, "_awg_prepare_in_progress", False))
+                or bool(getattr(self, "_awg_config_downloading", False))
+                or (bool(getattr(self, "_awg_running", False)) and not ready)
+            )
+        elif target == OLCRTC_KIND:
+            try:
+                port = int(self._olcrtc_port or (owner_port if owner == OLCRTC_KIND else 0) or OLCRTC_LOCAL_PORT)
+            except:
+                port = int(OLCRTC_LOCAL_PORT)
+            try:
+                ready = bool(port > 0 and self._is_local_olcrtc_proxy_applied(port))
+            except:
+                ready = False
+            busy = (
+                bool(getattr(self, "_olcrtc_connecting", False))
+                or bool(getattr(self, "_olcrtc_prepare_in_progress", False))
+                or bool(getattr(self, "_olcrtc_resume_checking", False))
+                or bool(getattr(self, "_olcrtc_backgrounded", False))
+                or (bool(getattr(self, "_olcrtc_running", False)) and not ready)
+            )
+
+        if ready:
+            return "connected"
+        if busy:
+            return "connecting"
+        return "disconnected"
+
+    def _settings_connection_badge(self):
+        gray = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
+        accent = Theme.getColor(Theme.key_windowBackgroundWhiteBlueText)
+        green = Theme.getColor(Theme.key_windowBackgroundWhiteGreenText)
+        red = Theme.getColor(Theme.key_text_RedBold)
+        if bool(getattr(self, "_proxy_suspended_by_wifi", False)):
+            return "● Приостановлен в этой WIFI сети", accent
+        if bool(getattr(self, "_proxy_suspended_by_vpn", False)):
+            return "● Приостановлен из-за VPN", accent
+        if not bool(self._is_plugin_proxy_enabled()):
+            return "● Прокси выключен", gray
+
+        mode = self._get_connection_mode()
+        state = self._settings_mode_runtime_state(mode)
+        if state == "connected":
+            label = {
+                VLESS_KIND: "Прокси",
+                TGWS_KIND: "TG WS",
+                AWG_KIND: "AmneziaWG",
+                OLCRTC_KIND: "olcRTC",
+            }.get(mode, "Прокси")
+            return "● " + label + " подключён", green
+        if state == "connecting":
+            label = self._settings_mode_title(mode)
+            return "● " + label + " подключается…", accent
+        if state == "paused":
+            return "● Прокси приостановлен", accent
+        if state == "disconnected":
+            return "● Прокси не подключён", red
+        return "● Состояние неизвестно", gray
+
+    def _refresh_mode_summary(self):
+        try:
+            controller = self._plugins_controller_instance()
+            plugin_id = self._plugin_settings_id()
+            if controller is not None and plugin_id:
+                controller.loadPluginSettings(plugin_id)
+        except:
+            pass
+
+    def _safe_settings_items(self, title, builder):
+        try:
+            return list(builder() or [])
+        except:
+            return [Text(text=f"{str(title or 'Раздел')[:18]}: ошибка", icon="msg_settings")]
+
+    def _build_mode_picker_cards(self):
+        try:
+            activity = self._current_activity()
+            if activity is None:
+                return None
+
+            dp = AndroidUtilities.dp
+            accent = Theme.getColor(Theme.key_featuredStickers_addButton)
+            title_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
+            muted_color = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
+            surface_color = Theme.getColor(Theme.key_windowBackgroundWhite)
+            divider_color = Theme.getColor(Theme.key_divider)
+            current = self._get_connection_mode()
+            resource = find_class("org.telegram.messenger.R")
+
+            root = LinearLayout(activity)
+            root.setOrientation(LinearLayout.VERTICAL)
+            root.setPadding(dp(16), dp(6), dp(16), dp(8))
+
+            for index, (mode, title_text) in enumerate(self._settings_mode_choices()):
+                selected = mode == current
+                card = LinearLayout(activity)
+                card.setOrientation(LinearLayout.HORIZONTAL)
+                card.setGravity(Gravity.CENTER_VERTICAL)
+                card.setPadding(dp(16), dp(14), dp(14), dp(14))
+                card.setClickable(True)
+                card.setFocusable(True)
+
+                background = GradientDrawable()
+                background.setColor(surface_color)
+                background.setCornerRadius(dp(14))
+                background.setStroke(dp(2) if selected else dp(1), accent if selected else divider_color)
+                card.setBackground(background)
+                try:
+                    card.setElevation(float(dp(1)))
+                except:
+                    pass
+                try:
+                    card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+                except:
+                    pass
+                self._bind_view_click(card, lambda _view, target=mode: self._select_mode_from_settings(target))
+
+                icon = ImageView(activity)
+                try:
+                    icon_id = int(getattr(resource.drawable, self._settings_mode_icon(mode), 0))
+                    if icon_id:
+                        icon.setImageResource(icon_id)
+                except:
+                    pass
+                icon.setColorFilter(accent if selected else muted_color)
+                icon_lp = LinearLayout.LayoutParams(dp(26), dp(26))
+                icon_lp.rightMargin = dp(15)
+                card.addView(icon, icon_lp)
+
+                labels = LinearLayout(activity)
+                labels.setOrientation(LinearLayout.VERTICAL)
+
+                title = TextView(activity)
+                title.setText(Z(title_text))
+                title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16)
+                title.setTextColor(accent if selected else title_color)
+                try:
+                    title.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                except:
+                    pass
+                labels.addView(title, LinearLayout.LayoutParams(-1, -2))
+
+                description = TextView(activity)
+                description.setText(Z(self._settings_mode_description(mode)))
+                description.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
+                description.setTextColor(muted_color)
+                description_lp = LinearLayout.LayoutParams(-1, -2)
+                description_lp.topMargin = dp(2)
+                labels.addView(description, description_lp)
+                card.addView(labels, LinearLayout.LayoutParams(0, -2, 1.0))
+
+                # A stable trailing affordance keeps every card's right edge
+                # aligned, including unselected rows.
+                affordance = TextView(activity)
+                affordance.setText("✓" if selected else "›")
+                affordance.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 21 if selected else 24)
+                affordance.setTextColor(accent if selected else muted_color)
+                affordance.setGravity(Gravity.CENTER)
+                affordance_lp = LinearLayout.LayoutParams(dp(30), dp(30))
+                affordance_lp.leftMargin = dp(8)
+                card.addView(affordance, affordance_lp)
+
+                card_lp = LinearLayout.LayoutParams(-1, -2)
+                card_lp.topMargin = dp(8)
+                root.addView(card, card_lp)
+
+            return _Custom(view=root)
+        except:
+            return None
+
+    def _create_mode_picker_subpage(self):
+        current = self._get_connection_mode()
+        items = [Header(text="Режим подключения")]
+        for mode, title in self._settings_mode_choices():
+            selected = (mode == current)
+            items.append(Text(
+                text=("✓ " if selected else "") + title,
+                subtext=self._settings_mode_description(mode),
+                icon=self._settings_mode_icon(mode),
+                accent=selected,
+                on_click=lambda *a, target=mode: self._select_mode_from_settings(target),
+            ))
+        items.extend([
+            Divider(),
+            Text(
+                text="Настройки сохраняются отдельно",
+                subtext="При возврате к режиму его конфиг останется на месте",
+                icon="msg_info",
+            ),
+        ])
+        return items
+
+    def _build_status_settings_items(self):
+        items = []
+        if bool(getattr(self, "_proxy_suspended_by_wifi", False)):
+            ssid = str(getattr(self, "_current_wifi_ssid_cache", "") or "")
+            items.append(Text(text="Приостановлено: WIFI " + (ssid or "сеть"), icon="msg_list"))
+        elif bool(getattr(self, "_proxy_suspended_by_vpn", False)):
+            items.append(Text(text="Приостановлено: активен VPN", icon="msg_secret"))
+        mode = self._get_connection_mode()
+        runtime_state = self._settings_mode_runtime_state(mode)
+        current_vless = self._current_vless_node()
+
+        if mode == VLESS_KIND:
+            vless_applied = runtime_state == "connected"
+            vless_connecting = runtime_state == "connecting"
+            vless_error = str(getattr(self, "_vless_last_error", "") or "").strip()
+            node_label = self._vless_node_plain_label(current_vless) if current_vless else "узел не выбран"
+            if runtime_state == "off":
+                status_text = "VLESS: выключен"
+            elif runtime_state == "paused":
+                status_text = "VLESS: приостановлен"
+            elif vless_connecting:
+                status_text = "● Подключение: " + node_label
+            elif vless_error and not vless_applied:
+                status_text = "● Не подключено: " + node_label
+            elif not vless_applied:
+                status_text = "● Не подключено: " + node_label
+            else:
+                status_text = self._custom_proxy_label(current_vless) + ": " + node_label if current_vless else "VLESS: подключен"
+            status_kwargs = {
+                "text": self._append_green_tail(
+                    status_text,
+                    self._vless_ping_badge(current_vless) if current_vless else "",
+                ),
+                "icon": "msg_retry" if vless_connecting else "msg2_proxy_on" if vless_applied else "msg2_proxy_off",
+            }
+            if vless_error and runtime_state == "disconnected":
+                status_kwargs["subtext"] = vless_error[:160]
+                status_kwargs["red"] = True
+            active_uri = str((current_vless or {}).get("uri", "") or "")
+            status_kwargs["create_sub_fragment"] = self._create_active_mode_subpage
+            if _is_proxy_uri(active_uri):
+                status_kwargs["on_long_click"] = lambda view, link=active_uri: self._copy_link(link)
+            items.append(Text(**status_kwargs))
+        elif mode == TGWS_KIND:
+            tgws_ready = runtime_state == "connected"
+            if tgws_ready:
+                tgws_text = "TG WS: подключен"
+            elif runtime_state == "connecting":
+                tgws_text = "TG WS: соединяю"
+            elif runtime_state == "paused":
+                tgws_text = "TG WS: приостановлен"
+            elif runtime_state == "disconnected":
+                tgws_text = "● Прокси не подключён"
+            else:
+                tgws_text = "TG WS: выключен"
+            items.append(Text(
+                text=tgws_text,
+                icon="msg2_proxy_on" if tgws_ready else "msg_retry" if runtime_state == "connecting" else "msg2_proxy_off",
+                create_sub_fragment=self._create_active_mode_subpage,
+            ))
+        elif mode == AWG_KIND:
+            name = str(self._awg_conf_name or "").strip() or "конфиг не выбран"
+            awg_error = str(getattr(self, "_awg_last_error", "") or "").strip()
+            awg_subtext = awg_error[:160] if runtime_state == "disconnected" and awg_error else {
+                "connected": "AmneziaWG подключён",
+                "connecting": "AmneziaWG подключается…",
+                "paused": "AmneziaWG приостановлен",
+                "disconnected": "Прокси не подключён",
+                "off": "AmneziaWG выключен",
+            }.get(runtime_state, "Состояние неизвестно")
+            items.append(Text(
+                text="AWG: " + name,
+                subtext=awg_subtext,
+                icon="msg2_proxy_on" if runtime_state == "connected" else "msg_retry" if runtime_state == "connecting" else "msg2_proxy_off",
+                create_sub_fragment=self._create_active_mode_subpage,
+            ))
+        elif mode == OLCRTC_KIND:
+            status_text, status_subtext, core_state = self._olcrtc_status_presentation()
+            if runtime_state == "connected":
+                status_text = "olcRTC: подключен"
+            elif runtime_state == "off":
+                status_text = "olcRTC: выключен"
+            elif runtime_state == "paused":
+                status_text = "olcRTC: приостановлен"
+            elif runtime_state == "disconnected" and core_state in ("ready", "running"):
+                status_text = "olcRTC: прокси не применён"
+            items.append(Text(
+                text=status_text,
+                subtext=status_subtext,
+                icon="msg2_proxy_on" if runtime_state == "connected" else "msg_retry" if runtime_state == "connecting" else "msg2_proxy_off",
+                create_sub_fragment=self._create_active_mode_subpage,
+            ))
+        else:
+            items.append(Text(text="Прокси не установлен", icon="msg2_proxy_off"))
+
+        return items
+
+    def _create_builtin_vless_subs_subpage(self):
+        items = [Header(text="Встроенные подписки")]
+        sources = self._builtin_vless_sub_sources()
+        if not sources:
+            items.append(Text(text="Подписок нет", icon="msg_info"))
+            return items
+
+        for source in sources:
+            url = str(source.get("url", "") or "")
+            imported = self._find_vless_subscription(url) is not None
+            label = str(source.get("name", "Подписка") or "Подписка")
+            if imported:
+                label = "Импортировано: " + label
+            items.append(Text(
+                text=label,
+                accent=bool(imported),
+                icon="msg_link",
+                on_click=lambda *a, url=url: self._add_vless_subscription(url, activate_first=(not self._get_active_vless_uri())),
+            ))
+        return items
+
+    def _build_vless_mode_items(self):
+        counts = self._vless_counts()
+        subs_count = int(counts.get("subs", 0) or 0)
+        auto_available = self._find_vless_node(VLESS_AUTO_SUBSCRIPTIONS_URI) is not None
+        active_uri = self._get_active_vless_uri()
+
+        all_nodes = []
+        seen_uris = set()
+        for node in self._iter_vless_nodes():
+            if not isinstance(node, dict):
+                continue
+            uri = str(node.get("uri", "") or "").strip()
+            if not uri or uri in seen_uris:
+                continue
+            seen_uris.add(uri)
+            all_nodes.append(node)
+
+        all_nodes = self._sorted_vless_nodes(all_nodes)
+        nodes_count = len(all_nodes)
+
+        items = []
+
+        if nodes_count > 0:
+            header_text = f"Узлы ({nodes_count})" if nodes_count > 1 else "Узлы"
+            items.append(Header(text=header_text))
+
+            display_nodes = all_nodes[:25]
+            for node in display_nodes:
+                uri = str(node.get("uri", "") or "")
+                selected = (uri == active_uri)
+                label = self._vless_node_plain_label(node)
+                ping = self._vless_ping_value(node)
+                checked_at = self._vless_ping_checked_at(node)
+                if 0 < int(ping) < 9999:
+                    unit = "мс" if _is_ru_language() else "ms"
+                    tail = f" • {int(ping)} {unit}"
+                elif checked_at > 0 and (int(ping) <= 0 or int(ping) >= 9999):
+                    tail = " • " + Z("Недоступен")
+                else:
+                    tail = ""
+                sub = self._vless_browser_row_subtext(node)
+                items.append(Text(
+                    text=label,
+                    subtext=sub + tail,
+                    icon=self._settings_check_icon() if selected else "msg_link2",
+                    accent=selected,
+                    on_click=lambda *a, u=uri: self._activate_vless_uri(u, enable_plugin=True),
+                    on_long_click=lambda view, u=uri: self._confirm_remove_vless_node(u),
+                ))
+
+            if nodes_count > 25:
+                items.append(Text(
+                    text="Все узлы и поиск…",
+                    subtext=f"Показать все {nodes_count} серверов",
+                    icon="msg_search",
+                    create_sub_fragment=self._create_vless_nodes_subpage,
+                ))
+        else:
+            items.extend([
+                Header(text="Серверы"),
+                Text(
+                    text="Пока нет узлов",
+                    subtext="Добавьте сервер или подписку",
+                    icon="msg_info",
+                ),
+            ])
+
+        items.extend([
+            Divider(),
+            Header(text="Управление"),
+            Text(
+                text="Импорт из буфера",
+                subtext="Добавить узел или подписку из ссылки",
+                accent=True,
+                icon="msg_download",
+                on_click=lambda *a: self._import_vless_from_clipboard(),
+            ),
+        ])
+
+        if auto_available:
+            items.append(Text(
+                text="Подключить лучший",
+                subtext="Включить сервер «Автовыбор»",
+                icon="msg_speed",
+                on_click=lambda *a: self._connect_best_vless_node(),
+            ))
+
+        if subs_count > 0:
+            items.append(Text(
+                text="Обновить подписки",
+                subtext="Загрузить свежий список узлов",
+                icon="msg_retry",
+                on_click=lambda *a: self._refresh_vless_subscriptions(),
+            ))
+
+        items.append(Text(
+            text="Встроенные подписки",
+            subtext="Готовые источники GreenPass",
+            icon="msg_channel",
+            create_sub_fragment=self._create_builtin_vless_subs_subpage,
+        ))
+
+        if nodes_count > 0 or subs_count > 0:
+            items.append(Text(
+                text="Очистить узлы",
+                subtext="Удалить свои узлы и подписки",
+                icon="msg_delete",
+                red=True,
+                on_click=lambda *a: self._confirm_clear_vless_nodes(),
+            ))
+
+        return items
+
+    def _build_tgws_mode_items(self):
+        runtime_state = self._settings_mode_runtime_state(TGWS_KIND)
+        running = runtime_state in ("connected", "connecting")
+        return [
+            Header(text="Подключение"),
+            Text(
+                text="Перезапустить TG WS" if running else "Запустить TG WS",
+                subtext="Пересоздать локальное подключение" if running else "Запустить локальный прокси",
+                icon="msg_retry" if running else "msg_start",
+                on_click=lambda *a: self._restart_tgws_from_settings(),
+            ),
+            Text(
+                text="Скопировать tg://proxy",
+                subtext="Ссылка на текущий локальный прокси",
+                icon="msg_copy_filled",
+                on_click=lambda *a: self._copy_link("tg://ws"),
+            ),
+        ]
+
+    def _build_awg_mode_items(self):
+        runtime_state = self._settings_mode_runtime_state(AWG_KIND)
+        running = runtime_state == "connected"
+        conf_name = str(self._awg_conf_name or "").strip() or "Не выбран"
+        items = [
+            Header(text="Конфигурация"),
+            Text(
+                text="Получить AWG конфиг",
+                subtext="Загрузить бесплатную конфигурацию",
+                icon="msg_download",
+                on_click=lambda *a: self._download_free_awg_config(),
+            ),
+            Text(
+                text="Выбрать .conf",
+                subtext=conf_name,
+                icon="msg_folders",
+                on_click=lambda *a: self._open_awg_file_picker(),
+            ),
+            Divider(),
+            Header(text="Подключение"),
+            Text(
+                text="Перезапустить AWG" if running else "Запустить AWG",
+                subtext="Пересоздать туннель" if running else "Запустить выбранный конфиг",
+                icon="msg_retry" if running else "msg_start",
+                on_click=lambda *a: self._restart_awg_from_settings(),
+            ),
+            Divider(),
+            Header(text="Очистка"),
+            Text(
+                text="Очистить AWG",
+                subtext="Удалить сохранённый конфиг",
+                icon="msg_delete",
+                red=True,
+                on_click=lambda *a: self._confirm_clear_awg(),
+            ),
+        ]
+        return items
+
+    def _build_olcrtc_mode_items(self):
+        runtime_state = self._settings_mode_runtime_state(OLCRTC_KIND)
+        profiles_count = len(self._sanitize_olcrtc_profiles(self._olcrtc_profiles))
+        active_or_busy = runtime_state in ("connected", "connecting")
+        items = [
+            Header(text="Профили"),
+            Text(
+                text="Профили и настройки",
+                subtext="Профилей: %d" % profiles_count,
+                icon="msg_folders",
+                create_sub_fragment=self._create_olcrtc_profiles_subpage,
+            ),
+            Divider(),
+            Header(text="Подключение"),
+            Text(
+                text="Перезапустить olcRTC" if active_or_busy else "Запустить olcRTC",
+                subtext="Повторить рукопожатие" if active_or_busy else "Запустить выбранный профиль",
+                icon="msg_retry" if active_or_busy else "msg_start",
+                on_click=lambda *a: self._restart_olcrtc_from_settings(),
+            ),
+        ]
+        items.extend([Divider(), Header(text="Ядро")])
+        core_status = self._libsingbox_addon_status(quick=True)
+        if core_status == "checking":
+            items.append(Text(text="Проверяю ядро…", subtext="Проверка библиотеки выполняется в фоне", icon="msg_retry", accent=True))
+        elif core_status == "current":
+            items.append(Text(text="Ядро установлено", subtext="Текущая версия GreenPass", icon=self._settings_check_icon()))
+        else:
+            core_action = "Обновить ядро" if core_status == "outdated" and SINGBOX_BUNDLE_URLS else "Скачать ядро"
+            items.append(Text(
+                text=core_action,
+                subtext="Нативная библиотека для этого устройства",
+                icon="msg_download_settings",
+                on_click=lambda *a: self._download_olcrtc_addon(),
+            ))
+        return items
+
+    def _build_active_mode_items(self):
+        mode = self._get_connection_mode()
+        if mode == VLESS_KIND:
+            return self._build_vless_mode_items()
+        if mode == TGWS_KIND:
+            return self._build_tgws_mode_items()
+        if mode == AWG_KIND:
+            return self._build_awg_mode_items()
+        if mode == OLCRTC_KIND:
+            return self._build_olcrtc_mode_items()
+        return self._build_vless_mode_items()
+
+    def _create_active_mode_subpage(self):
+        mode = self._get_connection_mode()
+        title = self._settings_main_mode_title(mode)
+        items = []
+        items.extend(self._safe_settings_items(title, self._build_active_mode_items))
+        return items
+
+    def _create_greenpass_extra_subpage(self):
+        items = [
+            Header(text="Сеть и автоматизация"),
+            Switch(
+                key="proxy_plugins_via_greenpass",
+                text="Проксировать плагины",
+                default=bool(self._get_plugins_proxy_enabled()),
+                subtext="Направляет запросы других плагинов через GreenPass",
+                icon="msg_link",
+                on_change=self._on_plugins_proxy_changed,
+            ),
+            Text(
+                text="Исключённые Wi-Fi сети",
+                subtext=self._excluded_wifi_menu_subtext(),
+                icon="msg_list",
+                create_sub_fragment=self._create_excluded_wifi_subpage,
+            ),
+            Divider(),
+            Header(text="Звонки (Voice Relay)"),
+            Text(
+                text="Параметры Voice Relay",
+                subtext="Сервер, порт и ключ шифрования",
+                icon="msg_settings",
+                create_sub_fragment=self._create_voice_relay_subpage,
+            ),
+            Text(
+                text="Скопировать tg://relay",
+                subtext="Ссылка на текущий Relay сервер",
+                icon="msg_link",
+                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
+            ),
+            Divider(),
+            Header(text="Ядро и прокси"),
+            Selector(
+                key="vless_engine",
+                text="Ядро VLESS",
+                default=self._vless_engine_index(),
+                items=list(VLESS_ENGINE_ITEMS),
+                icon="msg_settings",
+                on_change=self._on_vless_engine_changed,
+            ),
+            Switch(
+                key="core_autoupdate_enabled",
+                text="Автообновление ядра",
+                default=self._core_autoupdate_enabled(),
+                subtext="Обновлять библиотеку в фоне",
+                icon="msg_retry",
+                on_change=self._set_core_autoupdate_enabled,
+            ),
+            Switch(
+                key="vless_failover_enabled",
+                text="Переключать при сбое",
+                default=bool(self._vless_browser_failover_enabled()),
+                subtext="Переходить к следующему узлу",
+                icon="msg_retry",
+                on_change=self._on_vless_browser_failover_changed,
+            ),
+            Selector(
+                key="vless_auto_check_minutes",
+                text="Автопроверка пинга",
+                default=self._vless_browser_auto_check_index(),
+                items=["Выключена", "5 минут", "15 минут", "30 минут", "60 минут"],
+                icon="msg_speed",
+                on_change=self._on_vless_browser_auto_check_changed,
+            ),
+            Text(
+                text="Изменить HWID устройства",
+                subtext="Текущий: " + _get_or_create_subscription_hwid(),
+                icon="msg_edit",
+                on_click=lambda *a: self._regenerate_subscription_hwid(),
+            ),
+            Divider(),
+            Header(text="Диагностика и перенос"),
+            Text(
+                text="Скопировать логи ядра",
+                subtext="Состояние и последние сообщения",
+                icon="msg_log",
+                on_click=lambda *a: self._copy_active_core_logs(),
+            ),
+            Text(
+                text="Отправить логи в Избранное",
+                subtext="Журнал текущего запуска Telegram, включая переключения режимов",
+                icon="msg_log",
+                on_click=lambda *a: self._export_diagnostics_to_favorites(),
+            ),
+            Text(
+                text="Экспорт настроек",
+                subtext="Сохранить конфиги и настройки в Избранное",
+                icon="msg_link",
+                on_click=lambda *a: self._export_settings_to_favorites(),
+            ),
+            Text(
+                text="Импорт настроек",
+                subtext="Восстановить конфиги и настройки из файла",
+                icon="msg_download",
+                on_click=lambda *a: self._open_greenpass_import_file_picker(),
+            ),
+            Text(
+                text="Удалить ядро GreenPass",
+                subtext="Очистить локальный файл библиотеки",
+                icon="msg_delete",
+                red=True,
+                on_click=lambda *a: self._confirm_delete_vless_addon(),
+            ),
+        ]
+        return items
+
+
+    def _create_voice_relay_subpage(self):
+        return [
+            Header(text="Voice Relay"),
+            EditText(
+                key="tgws_voip_relay_ip",
+                hint="IPv4 Relay",
+                default=str(self.get_setting("tgws_voip_relay_ip", TGWS_VOIP_RELAY_HOST)),
+                max_length=15,
+            ),
+            EditText(
+                key="tgws_voip_relay_port",
+                hint="UDP-порт Relay",
+                default=str(self.get_setting("tgws_voip_relay_port", str(TGWS_VOIP_RELAY_CONTROL_PORT))),
+                max_length=5,
+            ),
+            EditText(
+                key="tgws_voip_relay_hmac",
+                hint="HMAC-ключ Relay",
+                default=str(self.get_setting("tgws_voip_relay_hmac", TGWS_VOIP_RELAY_SECRET.decode("utf-8"))),
+                max_length=512,
+            ),
+            Text(
+                text="Скопировать tg://relay",
+                icon="msg_link",
+                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
+            ),
+        ]
+
+    def _settings_main_mode_title(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        if target == VLESS_KIND:
+            engine = str(self.get_setting("vless_engine", "singbox") or "singbox").lower()
+            return f"VLESS ({'Mihomo' if engine == 'mihomo' else 'sing-box'})"
+        return self._settings_mode_title(target)
+
+    def _settings_main_mode_latency(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        if target == VLESS_KIND:
+            try:
+                node = self._current_vless_node()
+                if node:
+                    ping = self._vless_ping_value(node)
+                    if ping <= 0 and str(node.get("uri", "") or "") == VLESS_AUTO_SUBSCRIPTIONS_URI:
+                        balancer = list(node.get("balance_nodes", []) or [])
+                        if balancer:
+                            ping = self._vless_ping_value(balancer[0])
+                    if 0 < int(ping) < 9999:
+                        unit = "мс" if _is_ru_language() else "ms"
+                        return f"{int(ping)} {unit}"
+            except:
+                pass
+        return ""
+
+    def _maybe_probe_active_vless_node(self):
+        try:
+            if getattr(self, "_vless_bg_probing", False):
+                return
+            node = self._current_vless_node()
+            if not node:
+                return
+            ping = self._vless_ping_value(node)
+            checked_at = self._vless_ping_checked_at(node)
+            if ping > 0 and (time.time() - checked_at) < 180:
+                return
+            self._vless_bg_probing = True
+            def _worker():
+                try:
+                    self._refresh_vless_node_pings(force=True, save=True, nodes=[node])
+                    run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_stack=True), 150)
+                finally:
+                    self._vless_bg_probing = False
+            threading.Thread(target=_worker, daemon=True).start()
+        except:
+            pass
+
+    def _settings_main_mode_status(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        runtime_state = self._settings_mode_runtime_state(target)
+        if not bool(self._is_plugin_proxy_enabled()):
+            return "⚪ " + Z("Выключен")
+        if runtime_state == "paused":
+            return "⏸️ " + Z("Приостановлен")
+        if runtime_state == "connecting":
+            if target == AWG_KIND:
+                try:
+                    port = int(getattr(self, "_awg_port", 0) or AWG_LOCAL_PORT)
+                    local_applied = bool(self._is_local_proxy_applied(port, owner=AWG_KIND))
+                    if local_applied and bool(getattr(self, "_awg_running", False)) and not bool(getattr(self, "_awg_tunnel_ready", False)):
+                        return "🟡 " + Z("Прокси включён, туннель не подтверждён")
+                except:
+                    pass
+            elif target == TGWS_KIND:
+                try:
+                    port = int(getattr(self, "_tgws_port", 0) or TGWS_LOCAL_PORT)
+                    local_applied = bool(self._is_local_tgws_proxy_applied(port))
+                    if local_applied and bool(getattr(self, "_tgws_running", False)) and not self._tgws_telegram_is_connected():
+                        return "🟡 " + Z("Локальный прокси включён, Telegram переподключается")
+                except:
+                    pass
+            return "🟡 " + Z("Подключение…")
+        if runtime_state == "connected":
+            latency = self._settings_main_mode_latency(target)
+            if latency:
+                return f"🟢 {latency}"
+            return "🟢 " + Z("Подключено")
+        if runtime_state == "disconnected":
+            return "🔴 " + Z("Не подключено")
+        return "⚪ " + Z("Состояние неизвестно")
+
+    def _settings_config_row_subtext(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        config_label = self._settings_active_config_label(target)
+        runtime_state = self._settings_mode_runtime_state(target)
+        proxy_enabled = bool(self._is_plugin_proxy_enabled())
+
+        if not proxy_enabled:
+            emoji = "⚪"
+            status_text = Z("Выключен")
+        elif runtime_state == "paused":
+            emoji = "⏸️"
+            status_text = Z("Приостановлен")
+        elif runtime_state == "connecting":
+            emoji = "🟡"
+            status_text = Z("Подключение…")
+        elif runtime_state == "connected":
+            emoji = "🟢"
+            latency = self._settings_main_mode_latency(target)
+            status_text = latency if latency else ""
+        elif runtime_state == "disconnected":
+            emoji = "🔴"
+            status_text = Z("Не подключено")
+        else:
+            emoji = "⚪"
+            status_text = ""
+
+        tail = f" • {status_text}" if status_text else ""
+        if config_label:
+            return f"{emoji} {config_label}{tail}"
+        if status_text:
+            return f"{emoji} {status_text}"
+        return f"{emoji} " + Z("Конфигурация")
+
+    def _settings_active_config_label(self, mode=None):
+        target = self._normalize_proxy_mode(mode or self._get_connection_mode())
+        if target == VLESS_KIND:
+            try:
+                node = self._current_vless_node()
+                if node:
+                    name = self._vless_node_plain_label(node)
+                    if name:
+                        name = name.lstrip("🟢 ").lstrip("● ").strip()
+                        return name
+            except:
+                pass
+            return "Узел не выбран"
+        if target == AWG_KIND:
+            name = str(getattr(self, "_awg_conf_name", "") or "").strip()
+            return name if name else "Конфиг не выбран"
+        if target == OLCRTC_KIND:
+            try:
+                active_id = str(getattr(self, "_olcrtc_active_profile_id", "") or "")
+                profile = self._find_olcrtc_profile(active_id) if active_id else None
+                if profile:
+                    name = str(self._olcrtc_profile_name(profile) or "").strip()
+                    if name:
+                        return name
+            except:
+                pass
+            return "Профиль не выбран"
+        if target == TGWS_KIND:
+            return "Встроенный прокси"
+        return "Встроенный прокси"
+
+    def _quick_ping_test(self):
+        mode = self._get_connection_mode()
+        if mode == VLESS_KIND:
+            self._run_vless_ping_test()
+        else:
+            BulletinHelper.show_info(self._settings_main_mode_status(mode))
+
+    def _open_mode_picker_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            try:
+                fragment = get_last_fragment()
+                activity = fragment.getParentActivity() if fragment else None
+            except:
+                activity = None
+        if not activity:
+            BulletinHelper.show_error("Не удалось открыть диалог")
+            return False
+
+        try:
+            builder = AlertDialogBuilder(activity)
+            builder.set_title("Режим подключения")
+
+            current_mode = self._get_connection_mode()
+            modes_info = [
+                (VLESS_KIND, "VLESS", "Shadowsocks / VLESS через sing-box или Mihomo"),
+                (TGWS_KIND, "TG WS", "Telegram WebSocket прокси"),
+                (AWG_KIND, "AmneziaWG", "Туннель Amnezia WireGuard"),
+                (OLCRTC_KIND, "olcRTC", "WebRTC прокси"),
+            ]
+
+            dialog_ref = [None]
+
+            def _choose_mode(target):
+                try:
+                    if dialog_ref[0] is not None:
+                        dialog_ref[0].dismiss()
+                except:
+                    pass
+                self._select_mode_from_settings(target)
+
+            dp = AndroidUtilities.dp
+            accent = Theme.getColor(Theme.key_featuredStickers_addButton)
+            title_color = Theme.getColor(Theme.key_windowBackgroundWhiteBlackText)
+            muted_color = Theme.getColor(Theme.key_windowBackgroundWhiteGrayText)
+            surface_color = Theme.getColor(Theme.key_windowBackgroundWhite)
+            divider_color = Theme.getColor(Theme.key_divider)
+            resource = find_class("org.telegram.messenger.R")
+
+            container = LinearLayout(activity)
+            container.setOrientation(LinearLayout.VERTICAL)
+            container.setPadding(dp(16), dp(8), dp(16), dp(8))
+
+            custom_view_ok = False
+            if dynamic_proxy is not None:
+                for mode_key, mode_title, mode_desc in modes_info:
+                    selected = (mode_key == current_mode)
+
+                    card = LinearLayout(activity)
+                    card.setOrientation(LinearLayout.HORIZONTAL)
+                    card.setGravity(Gravity.CENTER_VERTICAL)
+                    card.setPadding(dp(14), dp(12), dp(14), dp(12))
+                    card.setClickable(True)
+                    card.setFocusable(True)
+
+                    card_bg = GradientDrawable()
+                    card_bg.setCornerRadius(dp(14))
+                    if selected:
+                        accent_rgb = accent & 0x00FFFFFF
+                        card_bg.setColor((0x20 << 24) | accent_rgb)
+                        card_bg.setStroke(dp(1.5), accent)
+                    else:
+                        card_bg.setColor(surface_color)
+                        card_bg.setStroke(dp(1), divider_color)
+                    card.setBackground(card_bg)
+                    try:
+                        card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+                    except:
+                        pass
+
+                    icon_name = self._settings_mode_icon(mode_key)
+                    icon_id = int(getattr(resource.drawable, icon_name, 0)) if resource else 0
+                    if icon_id:
+                        icon = ImageView(activity)
+                        icon.setImageResource(icon_id)
+                        icon.setColorFilter(accent if selected else muted_color)
+                        icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                        icon_lp.rightMargin = dp(14)
+                        card.addView(icon, icon_lp)
+
+                    text_layout = LinearLayout(activity)
+                    text_layout.setOrientation(LinearLayout.VERTICAL)
+
+                    title_view = TextView(activity)
+                    title_view.setText(Z(mode_title))
+                    title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                    title_view.setTextColor(accent if selected else title_color)
+                    try:
+                        title_view.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                    except:
+                        pass
+                    text_layout.addView(title_view, LinearLayout.LayoutParams(-1, -2))
+
+                    desc_view = TextView(activity)
+                    desc_view.setText(Z(mode_desc))
+                    desc_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                    desc_view.setTextColor(muted_color)
+                    desc_lp = LinearLayout.LayoutParams(-1, -2)
+                    desc_lp.topMargin = dp(2)
+                    text_layout.addView(desc_view, desc_lp)
+
+                    card.addView(text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
+
+                    radio_view = TextView(activity)
+                    radio_lp = LinearLayout.LayoutParams(dp(22), dp(22))
+                    radio_lp.leftMargin = dp(12)
+                    radio_bg = GradientDrawable()
+                    radio_bg.setCornerRadius(dp(11))
+                    if selected:
+                        radio_bg.setColor(accent)
+                        radio_view.setBackground(radio_bg)
+                        radio_view.setText("✓")
+                        radio_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                        radio_view.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
+                        radio_view.setGravity(Gravity.CENTER)
+                        try:
+                            radio_view.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                        except:
+                            pass
+                    else:
+                        radio_bg.setColor(0x00000000)
+                        radio_bg.setStroke(dp(1.5), (0x55 << 24) | (muted_color & 0x00FFFFFF) if muted_color else 0x44888888)
+                        radio_view.setBackground(radio_bg)
+                        radio_view.setText("")
+                    card.addView(radio_view, radio_lp)
+
+                    self._bind_view_click(card, lambda _view, target=mode_key: _choose_mode(target))
+
+                    card_lp = LinearLayout.LayoutParams(-1, -2)
+                    card_lp.topMargin = dp(4)
+                    card_lp.bottomMargin = dp(4)
+                    container.addView(card, card_lp)
+
+                custom_view_ok = True
+
+            if custom_view_ok:
+                builder.set_view(container)
+            else:
+                items_labels = [
+                    f"{'● ' if m == current_mode else '○ '}{title} — {desc}"
+                    for m, title, desc in modes_info
+                ]
+                builder.set_items(items_labels, lambda dlg, which: _choose_mode(modes_info[int(which)][0]))
+
+            builder.set_negative_button("Отмена", lambda dlg, which: dlg.dismiss())
+            builder.set_cancelable(True)
+            dialog_ref[0] = builder.show()
+            return True
+        except Exception as exc:
+            BulletinHelper.show_error("Ошибка выбора режима: " + str(exc))
+            return False
+
+    def create_settings(self):
+        try:
+            hero = self._build_settings_hero()
+            settings = [hero] if hero is not None else [Header(text="GreenPass")]
+            if self._vless_prepare_in_progress:
+                settings.append(Text(
+                    text="Ядро загружается…",
+                    subtext="Скачивание и проверка библиотеки",
+                    icon="msg_download_settings",
+                    accent=True,
+                ))
+
+            settings.append(Header(text="Подключение"))
+            tg_proxy_enabled = bool(self._is_plugin_proxy_enabled())
+            settings.append(Switch(
+                key="use_proxy",
+                text="Использовать прокси",
+                default=bool(tg_proxy_enabled),
+                subtext="Подключать Telegram через выбранный режим",
+                icon="msg_link2",
+                on_change=self._on_use_proxy_changed,
+            ))
+
+            active_mode = self._get_connection_mode()
+            if tg_proxy_enabled and active_mode == VLESS_KIND:
+                self._maybe_probe_active_vless_node()
+            mode_title = self._settings_main_mode_title(active_mode)
+            settings.append(Text(
+                text="Режим подключения",
+                subtext=mode_title,
+                icon=self._settings_mode_icon(active_mode),
+                on_click=lambda *a: self._open_mode_picker_dialog(),
+            ))
+
+            config_subtext = self._settings_config_row_subtext(active_mode)
+            settings.append(Text(
+                text="Серверы и конфиг",
+                subtext=config_subtext,
+                icon="msg_folders",
+                create_sub_fragment=self._create_active_mode_subpage,
+            ))
+
+            settings.append(Divider())
+            settings.append(Header(text="Частые настройки"))
+            settings.append(Text(
+                text="Проверить пинг",
+                subtext="Тест задержки и доступности узлов",
+                icon="msg_speed",
+                on_click=lambda *a: self._quick_ping_test(),
+            ))
+            settings.append(Switch(
+                key="dont_use_with_vpn",
+                text="Не использовать с VPN",
+                default=bool(self.get_setting("dont_use_with_vpn", True)),
+                subtext="Отключать прокси при активном VPN",
+                icon="msg_secret",
+                on_change=self._on_dont_use_with_vpn_changed,
+            ))
+            settings.append(Switch(
+                key="tgws_voip_relay_enabled",
+                text="Звонки через Relay",
+                default=bool(self._get_tgws_voip_relay_enabled()),
+                subtext="Обход блокировки голосовых звонков",
+                icon="msg_calls",
+                on_change=self._set_tgws_voip_relay_enabled,
+            ))
+
+            settings.append(Divider())
+            settings.append(Header(text="Дополнительно"))
+            settings.append(Text(
+                text="Расширенные настройки",
+                subtext="Сети, ядро, Voice Relay, перенос",
+                icon="msg_settings",
+                create_sub_fragment=self._create_greenpass_extra_subpage,
+            ))
+            settings.append(Divider())
+
+            return settings
+        except Exception as e:
+            return [Header(text="Ошибка"), Text(text=str(e), icon="msg_info")]
+
+    def _get_active_mode_core(self):
+        mode = self._get_connection_mode()
+        if mode == AWG_KIND:
+            try:
+                self._awg_core._ensure()
+            except:
+                pass
+            return getattr(getattr(self._awg_core, "_real", None), "_core", None) or self._awg_core
+        elif mode == OLCRTC_KIND:
+            try:
+                self._olcrtc_core._ensure()
+            except:
+                pass
+            return getattr(self._olcrtc_core, "_real", None) or self._olcrtc_core
+        else:
+            try:
+                self._vless_core._ensure()
+            except:
+                pass
+            return getattr(self._vless_core, "_real", None) or self._vless_core
+
+    def _copy_active_core_logs(self):
+        mode = self._get_connection_mode()
+        if mode == TGWS_KIND:
+            return self._copy_tgws_logs()
+        diag_text = self._build_full_diagnostics_text()
+        self._copy_text("GreenPass core logs", diag_text, "Логи скопированы")
+
+    def _get_tg_network_diag_info(self):
+        tg_state_str = "unknown"
+        try:
+            account_id = _selected_account() if callable(globals().get("_selected_account")) else 0
+            cm = ConnectionsManager.getInstance(account_id)
+            state_code = int(cm.getConnectionState())
+            state_map = {}
+            for field_name, label in (
+                ("ConnectionStateConnecting", "Connecting"),
+                ("ConnectionStateWaitingForNetwork", "WaitingForNetwork"),
+                ("ConnectionStateConnected", "Connected"),
+                ("ConnectionStateConnectingToProxy", "ConnectingToProxy"),
+                ("ConnectionStateUpdating", "Updating"),
+            ):
+                try:
+                    value = int(getattr(ConnectionsManager, field_name))
+                    state_map[value] = "%s(%s)" % (label, value)
+                except:
+                    pass
+            # Telegram's public state constants use 4 for ConnectingToProxy
+            # and 5 for Updating. Keep these fallbacks for forks that hide the
+            # constants from the plugin bridge.
+            state_map.setdefault(1, "Connecting(1)")
+            state_map.setdefault(2, "WaitingForNetwork(2)")
+            state_map.setdefault(3, "Connected(3)")
+            state_map.setdefault(4, "ConnectingToProxy(4)")
+            state_map.setdefault(5, "Updating(5)")
+            tg_state_str = state_map.get(state_code, f"State({state_code})")
+        except Exception as e:
+            tg_state_str = f"err({e})"
+
+        proxy_enabled = False
+        # Different Telegram/Extera versions expose different enable flags.
+        # The persisted preference is also authoritative on versions without
+        # either public field.
+        for flag_name in ("useProxySettings", "proxyEnabled"):
+            try:
+                proxy_enabled = proxy_enabled or bool(getattr(SharedConfig, flag_name, False))
+            except:
+                pass
+        if not proxy_enabled:
+            try:
+                proxy_enabled = bool(MessagesController.getGlobalMainSettings().getBoolean("proxy_enabled", False))
+            except:
+                pass
+
+        cur_proxy_str = "none"
+        try:
+            cur = getattr(SharedConfig, "currentProxy", None)
+            if cur is not None:
+                values = self._local_proxy_values(cur)
+                addr = str(values.get("address", "") or "")
+                port = int(values.get("port", 0) or 0)
+                has_s = self._local_proxy_settings(cur) is not None
+                cur_proxy_str = f"{addr}:{port} (has_settings={has_s})"
+        except Exception as e:
+            cur_proxy_str = f"err({e})"
+
+        return tg_state_str, proxy_enabled, cur_proxy_str
+
+    def _build_full_diagnostics_text(self):
+        mode = self._get_connection_mode()
+        core = self._get_active_mode_core()
+        tg_state, tg_proxy_enabled, cur_proxy = self._get_tg_network_diag_info()
+        owner, owner_port = self._local_socks_owner_snapshot() if hasattr(self, "_local_socks_owner_snapshot") else ("", 0)
+
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        lines = [
+            "=== GreenPass Diagnostics ===",
+            f"timestamp={now_str}",
+            f"plugin_version={__version__}",
+            f"app_version={__app_version__}",
+            f"sdk_version={__sdk_version__}",
+            f"mode={mode}",
+            f"tg_connection_state={tg_state}",
+            f"tg_use_proxy={tg_proxy_enabled}",
+            f"tg_current_proxy={cur_proxy}",
+            f"socks_owner={str(owner or '')}",
+            f"socks_port={int(owner_port or 0)}",
+        ]
+
+        if mode == AWG_KIND:
+            port = int(getattr(self, "_awg_port", 0) or AWG_LOCAL_PORT)
+            running = bool(getattr(self, "_awg_running", False))
+            connecting = bool(getattr(self, "_awg_connecting", False))
+            port_open = _check_vless_port(port, timeout=0.1)
+            socks_ok = _check_vless_socks_ready(port, timeout=0.2)
+            lines.extend([
+                f"awg_running={running}",
+                f"awg_port={port}",
+                f"awg_connecting={connecting}",
+                f"awg_port_listening={port_open}",
+                f"awg_socks_ready={socks_ok}",
+                f"awg_conf_name={str(getattr(self, '_awg_conf_name', '') or '')}",
+            ])
+        elif mode == VLESS_KIND:
+            port = int(getattr(self, "_vless_port", 0) or 0)
+            lines.extend([
+                f"vless_running={bool(getattr(self, '_vless_running', False))}",
+                f"vless_port={port}",
+                f"connect_worker={bool(getattr(self, '_vless_connect_worker_active', False))}",
+                f"connect_pending={bool(getattr(self, '_vless_connect_pending', False))}",
+                f"connecting={bool(getattr(self, '_vless_connecting', False))}",
+                f"vpn_suspended={bool(getattr(self, '_vless_vpn_suspended', False))}",
+                f"wifi_suspended={bool(getattr(self, '_vless_wifi_suspended', False))}",
+                f"vless_active_uri={str(getattr(self, '_get_active_vless_uri', lambda: '')() or '')}",
+            ])
+        elif mode == TGWS_KIND:
+            port = int(getattr(self, "_tgws_port", 0) or 0)
+            lines.extend([
+                f"tgws_running={bool(getattr(self, '_tgws_running', False))}",
+                f"tgws_port={port}",
+            ])
+        elif mode == OLCRTC_KIND:
+            port = int(getattr(self, "_olcrtc_port", 0) or 0)
+            lines.extend([
+                f"olcrtc_running={bool(getattr(self, '_olcrtc_running', False))}",
+                f"olcrtc_port={port}",
+            ])
+
+        last_plugin_err = str(getattr(self, "_vless_last_error", "") or "").strip()
+        if last_plugin_err:
+            lines.append(f"plugin_last_error={last_plugin_err}")
+
+        core_last_err = ""
+        if core is not None and hasattr(core, "last_error"):
+            try:
+                core_last_err = str(core.last_error() or "").strip()
+            except:
+                core_last_err = ""
+        if core_last_err:
+            lines.append(f"core_last_error={core_last_err}")
+
+        parts = ["\n".join(lines)]
+
+        events_text = _get_diagnostic_events_text()
+        if events_text:
+            parts.append("=== Recent Plugin Events ===\n" + events_text)
+
+        ansi_re = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+        raw_json = ""
+        if core is not None and hasattr(core, "logs_json"):
+            try:
+                raw_json = str(core.logs_json() or "").strip()
+            except:
+                raw_json = ""
+
+        errors_found = []
+        if last_plugin_err:
+            errors_found.append(f"[PLUGIN] {last_plugin_err}")
+        if core_last_err:
+            errors_found.append(f"[CORE] {core_last_err}")
+
+        clean_logs = []
+        if raw_json:
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if not isinstance(item, dict):
+                            continue
+                        ts = item.get("timestamp") or 0
+                        level = str(item.get("level") or "info").lower()
+                        msg = str(item.get("message") or "")
+                        clean_msg = ansi_re.sub('', msg).strip()
+
+                        time_str = ""
+                        if ts:
+                            try:
+                                time_str = time.strftime('%H:%M:%S', time.localtime(float(ts) / 1000.0))
+                            except:
+                                time_str = str(ts)
+
+                        prefix = f"[{time_str}] " if time_str else ""
+                        formatted_line = f"{prefix}[{level.upper()}] {clean_msg}"
+                        clean_logs.append(formatted_line)
+
+                        if (level in ("error", "fatal", "warn", "warning") or
+                                "error" in clean_msg.lower() or
+                                "failed" in clean_msg.lower() or
+                                "missing" in clean_msg.lower()):
+                            errors_found.append(formatted_line)
+            except Exception as e:
+                clean_logs.append(f"Failed to parse logs_json ({e}):\n{raw_json}")
+
+        if errors_found:
+            seen = set()
+            dedup_errors = []
+            for err_line in errors_found:
+                if err_line not in seen:
+                    seen.add(err_line)
+                    dedup_errors.append(err_line)
+            parts.append("=== Errors and Warnings ===\n" + "\n".join(dedup_errors))
+
+        if clean_logs:
+            parts.append("=== Core Logs (Sing-box) ===\n" + "\n".join(clean_logs))
+        elif core is not None and hasattr(core, "last_log"):
+            try:
+                last_log = str(core.last_log() or "").strip()
+                if last_log:
+                    parts.append("=== Core Last Log ===\n" + ansi_re.sub('', last_log))
+            except:
+                pass
+
+        if mode == AWG_KIND:
+            conf_content = str(getattr(self, "_awg_conf_content", "") or "").strip()
+            if conf_content:
+                sanitized_lines = []
+                for line in conf_content.splitlines():
+                    low = line.lower().strip()
+                    if low.startswith("privatekey") or low.startswith("presharedkey"):
+                        k, _ = line.split("=", 1)
+                        sanitized_lines.append(f"{k.strip()} = [REDACTED]")
+                    else:
+                        sanitized_lines.append(line)
+                parts.append("=== AWG Configuration (Sanitized) ===\n" + "\n".join(sanitized_lines))
+        elif mode == TGWS_KIND:
+            try:
+                parts.append("=== TG WS Diagnostics ===\n" + self._tgws_diagnostics_text())
+            except:
+                pass
+
+        return "\n\n".join(parts)
+
+    def _copy_singbox_logs(self, core=None):
+        diag_text = self._build_full_diagnostics_text()
+        self._copy_text("GreenPass core logs", diag_text, "Логи скопированы")
+
+    def _export_diagnostics_to_favorites(self):
+        def _worker():
+            try:
+                diag_text = self._build_full_diagnostics_text()
+                ts_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = f"GreenPass_Logs_{ts_str}.txt"
+
+                base_dir = ""
+                try:
+                    if hasattr(self, "_vless_dir") and self._vless_dir:
+                        base_dir = os.path.abspath(str(self._vless_dir))
+                except:
+                    base_dir = ""
+                if not base_dir:
+                    try:
+                        base_dir = ApplicationLoader.applicationContext.getCacheDir().getAbsolutePath()
+                    except:
+                        base_dir = "."
+                if not os.path.exists(base_dir):
+                    try:
+                        os.makedirs(base_dir)
+                    except:
+                        pass
+                file_path = os.path.join(base_dir, filename)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(diag_text)
+
+                account = _selected_account()
+                user_id = UserConfig.getInstance(account).getClientUserId()
+
+                def _send():
+                    try:
+                        _send_document_as(account, user_id, file_path, caption=f"GreenPass Diagnostics ({ts_str})")
+                        BulletinHelper.show_success("Логи отправлены в Избранное")
+                    except Exception as send_exc:
+                        _log_diag("ERROR", f"Failed to send logs to favorites: {send_exc}")
+                        BulletinHelper.show_error("Ошибка отправки: %s" % str(send_exc))
+
+                run_on_ui_thread(_send)
+            except Exception as exc:
+                err_text = str(exc)
+                _log_diag("ERROR", f"Diagnostic export error: {exc}")
+                run_on_ui_thread(lambda err_text=err_text: BulletinHelper.show_error("Ошибка экспорта: %s" % err_text))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _tgws_diagnostics_text(self):
+        try:
+            port = int(getattr(self, "_tgws_port", 0) or 0)
+        except:
+            port = 0
+
+        def _safe_len(value):
+            try:
+                return len(value)
+            except:
+                return 0
+
+        def _safe_bool(fn):
+            try:
+                return bool(fn())
+            except:
+                return False
+
+        tg_state, tg_proxy_enabled, cur_proxy = self._get_tg_network_diag_info()
+        local_port_alive = _safe_bool(lambda: port > 0 and _check_vless_port(port))
+        local_proxy_applied = _safe_bool(lambda: port > 0 and self._is_local_tgws_proxy_applied(port))
+        local_mtproto_ready = False
+        proxy_type = "unknown"
+        proxy_secret_present = False
+        proxy_secret_matches = False
+        proxy_settings_valid = False
+        try:
+            proxy = getattr(SharedConfig, "currentProxy", None)
+            settings = self._local_proxy_settings(proxy)
+            values = self._local_proxy_values(proxy)
+            proxy_secret_present = bool(values.get("secret", ""))
+            proxy_secret_matches = bool(
+                proxy_secret_present
+                and values.get("secret", "") == _tgws_proxy_secret_for_telegram()
+            )
+            if settings is not None:
+                type_value = getattr(settings, "getType", None)
+                type_value = type_value() if callable(type_value) else getattr(settings, "type", "")
+                proxy_type = str(type_value or "unknown").split(".")[-1]
+                is_valid = getattr(settings, "isValid", None)
+                proxy_settings_valid = bool(is_valid()) if callable(is_valid) else False
+            local_mtproto_ready = bool(
+                local_port_alive
+                and local_proxy_applied
+                and proxy_secret_matches
+                and proxy_type.upper() == "MTPROTO"
+                and proxy_settings_valid
+            )
+        except:
+            pass
+
+        rows = [
+            ("tg_connection_state", tg_state),
+            ("telegram_connected", _safe_bool(lambda: self._tgws_telegram_is_connected())),
+            ("tg_use_proxy", tg_proxy_enabled),
+            ("tg_current_proxy", cur_proxy),
+            ("mode", self._get_connection_mode()),
+            ("running", bool(getattr(self, "_tgws_running", False))),
+            ("ready", bool(getattr(self, "_tgws_ready", False))),
+            ("connecting", bool(getattr(self, "_tgws_connecting", False))),
+            ("backgrounded", bool(getattr(self, "_tgws_backgrounded", False))),
+            ("generation", int(getattr(self, "_tgws_generation", 0) or 0)),
+            ("port", port),
+            ("local_port_alive", local_port_alive),
+            ("local_mtproto_ready", local_mtproto_ready),
+            ("local_proxy_applied", local_proxy_applied),
+            ("proxy_type", proxy_type),
+            ("proxy_secret_present", proxy_secret_present),
+            ("proxy_secret_matches_expected", proxy_secret_matches),
+            ("proxy_settings_valid", proxy_settings_valid),
+        ]
+
+        try:
+            last_heal = float(getattr(self, "_tgws_last_heal_ts", 0.0) or 0.0)
+            rows.append(("last_heal_age_sec", int(time.time() - last_heal) if last_heal > 0 else 0))
+        except:
+            pass
+
+        core = getattr(self, "_tgws_core", None)
+        if core is not None:
+            rows.append(("core_available", _safe_bool(lambda: core.is_available())))
+            rows.append(("listener", getattr(core, "listener", None) is not None))
+            try:
+                thread = getattr(core, "listener_thread", None)
+                rows.append(("listener_thread_alive", bool(thread is not None and thread.is_alive())))
+            except:
+                pass
+            try:
+                with core.lock:
+                    rows.append(("tracked", _safe_len(getattr(core, "tracked", []))))
+            except:
+                rows.append(("tracked", _safe_len(getattr(core, "tracked", []))))
+            rows.extend([
+                ("core_port", int(getattr(core, "port", 0) or 0)),
+                ("fail_until", _safe_len(getattr(core, "fail_until", {}))),
+                ("fail_count", _safe_len(getattr(core, "fail_count", {}))),
+                ("ip_fail_until", _safe_len(getattr(core, "ip_fail_until", {}))),
+                ("ws_blacklist", _safe_len(getattr(core, "ws_blacklist", set()))),
+                ("ws_domain_pref", _safe_len(getattr(core, "ws_domain_pref", {}))),
+                ("cf_domain_pref", _safe_len(getattr(core, "cf_domain_pref", {}))),
+                ("cf_429_until", _safe_len(getattr(core, "cf_429_until", {}))),
+                ("cfproxy_enabled", bool(getattr(core, "cfproxy_enabled", False))),
+                ("cfproxy_priority", bool(getattr(core, "cfproxy_priority", False))),
+                ("cfproxy_domains", _safe_len(getattr(core, "cfproxy_domains", []))),
+                ("cfproxy_worker", bool(str(getattr(core, "cfproxy_worker_domain", "") or "").strip())),
+            ])
+            try:
+                pool = getattr(core, "ws_pool", None)
+                idle_count = 0
+                idle_keys = 0
+                refilling = 0
+                rotating = 0
+                refill_backoff = 0
+                if pool is not None:
+                    with pool.lock:
+                        idle = getattr(pool, "idle", {}) or {}
+                        idle_keys = len(idle)
+                        idle_count = sum(len(value) for value in idle.values())
+                        refilling = _safe_len(getattr(pool, "refilling", set()))
+                        rotating = _safe_len(getattr(pool, "rotating", set()))
+                        refill_backoff = _safe_len(getattr(pool, "refill_after", {}))
+                rows.extend([
+                    ("ws_pool_size", int(getattr(pool, "size", 0) or 0) if pool is not None else 0),
+                    ("ws_pool_idle_keys", idle_keys),
+                    ("ws_pool_idle", idle_count),
+                    ("ws_pool_refilling", refilling),
+                    ("ws_pool_rotating", rotating),
+                    ("ws_pool_refill_backoff", refill_backoff),
+                ])
+            except:
+                pass
+
+        text = "\n".join("%s: %s" % (key, value) for key, value in rows)
+        try:
+            if core is not None and hasattr(core, "diagnostics_text"):
+                text += "\n\n=== Recent TG WS network events ===\n" + str(core.diagnostics_text() or "")
+        except:
+            pass
+        return text
+
+    def _copy_tgws_logs(self):
+        self._copy_text("GreenPass TG WS logs", self._tgws_diagnostics_text(), "Логи скопированы")
+
+    def _copy_link(self, link):
+        self._copy_text("Proxy Link", link, "Ссылка скопирована")
+
