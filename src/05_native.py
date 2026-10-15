@@ -75,6 +75,11 @@ class VlessCore:
             lib = linker.load(self._so_path)
             if not lib:
                 return
+            try:
+                _GP_PROCESS_STATE.active_native_lib = lib
+                _GP_PROCESS_STATE.active_so_path = str(self._so_path or "")
+            except:
+                pass
             lib.StartCore.argtypes = [ctypes.c_char_p]
             lib.StartCore.restype = ctypes.c_void_p
             lib.StopCore.argtypes = []
@@ -160,6 +165,13 @@ class VlessCore:
         if not self.is_available():
             return "Native library not loaded"
         try:
+            try:
+                if self.is_running():
+                    with self._native_lock:
+                        self.lib.StopCore()
+                    time.sleep(0.08)
+            except:
+                pass
             config_text = str(config_json or "")
             is_qwdtt = False
             try:
@@ -281,6 +293,27 @@ def _gp_claim_go_core(kind):
         if bool(getattr(_GP_PROCESS_STATE, "go_core_blocked", False)):
             return False
         return True
+
+
+def _stop_global_go_core():
+    """Unconditionally stops any Go core currently running in libgreenpass.so."""
+    lib = getattr(_GP_PROCESS_STATE, "active_native_lib", None)
+    if lib and hasattr(lib, "StopCore"):
+        try:
+            lib.StopCore()
+        except:
+            pass
+    so_path = getattr(_GP_PROCESS_STATE, "active_so_path", "")
+    if so_path and os.path.exists(so_path):
+        try:
+            linker = _NativeLinker()
+            handle = linker.load(so_path)
+            if handle and hasattr(handle, "StopCore"):
+                _GP_PROCESS_STATE.active_native_lib = handle
+                handle.StopCore()
+        except:
+            pass
+
 
 
 class _LazySingboxCore:
@@ -539,7 +572,6 @@ def _check_vless_port(port, timeout=0.2):
 def _is_port_bindable(port):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((VLESS_LOCAL_HOST, int(port)))
             return True
     except:
@@ -553,11 +585,15 @@ def _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05):
         return False
 
     deadline = time.time() + float(timeout_sec)
+    stop_signaled = False
     while time.time() < deadline:
         if not _check_vless_port(target_port) and _is_port_bindable(target_port):
             return True
+        if not stop_signaled:
+            _stop_global_go_core()
+            stop_signaled = True
         time.sleep(float(poll_sec))
-    return _is_port_bindable(target_port)
+    return (not _check_vless_port(target_port)) and _is_port_bindable(target_port)
 
 
 def _recv_socks_bytes(sock, size):
@@ -666,29 +702,13 @@ def _get_free_port():
 
 
 def _pick_tgws_port(preferred=None, excluded=None):
-    used = set(int(x) for x in list(TGWS_RESERVED_PORTS or []))
     try:
         preferred_port = int(preferred or 0)
     except:
         preferred_port = 0
-    if excluded:
-        try:
-            for value in excluded:
-                try:
-                    used.add(int(value))
-                except:
-                    pass
-        except:
-            pass
-    if preferred_port > 0 and preferred_port not in used and _wait_vless_port_closed(preferred_port, timeout_sec=0.05, poll_sec=0.05):
+    if preferred_port > 0:
         return preferred_port
-    for _ in range(32):
-        candidate = _get_free_port()
-        if candidate in used:
-            continue
-        if _wait_vless_port_closed(candidate, timeout_sec=0.05, poll_sec=0.05):
-            return int(candidate)
-    return 0
+    return int(TGWS_LOCAL_PORT or 10804)
 
 __all__ = [name for name in globals() if not name.startswith("__")]
 

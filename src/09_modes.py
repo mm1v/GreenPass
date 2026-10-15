@@ -825,6 +825,7 @@ class SingBoxModeMixin:
             return True
 
         self._vless_disconnect(silent=True, cancel_pending=False)
+        self._stop_all_proxy_cores(target_port=VLESS_LOCAL_PORT)
         self._set_vless_connection_state(True, "")
         try:
             self._vless_core.lib
@@ -843,16 +844,15 @@ class SingBoxModeMixin:
             self._delay_vless_retry()
             self._set_vless_connection_state(False, "Нет свободного локального порта")
             return False
-        username = "" if qwdtt_mode else "greenpass"
-        password = "" if qwdtt_mode else str(self._vless_socks_password or "")
+        username = ""
+        password = ""
         with self._vless_transition_lock:
             if not self._should_run_vless():
                 return False
             generation = self._next_vless_generation()
             self._vless_port = int(port)
-            self._vless_socks_username = username
-            if not qwdtt_mode:
-                self._vless_socks_password = password
+            self._vless_socks_username = ""
+            self._vless_socks_password = ""
             self._vless_local_owner = VLESS_KIND
         if qwdtt_mode:
             single_config = _qwdtt_core_config((current_node or {}).get("qwdtt", {}), port)
@@ -984,15 +984,7 @@ class SingBoxModeMixin:
                 err = self._vless_core.start(config_json)
         bind_error = str(err or "").lower()
         if err and ("address already in use" in bind_error or "eaddrinuse" in bind_error):
-            try:
-                self._awg_core.stop()
-            except:
-                pass
-            try:
-                self._vless_core.stop()
-            except:
-                pass
-            _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05)
+            self._stop_all_proxy_cores(target_port=port)
             err = self._vless_core.start(config_json)
             bind_error = str(err or "").lower()
         if err and ("address already in use" in bind_error or "eaddrinuse" in bind_error):
@@ -1319,6 +1311,7 @@ class SingBoxModeMixin:
             self._olcrtc_disconnect_with_reason("switch_to_vless_mode", silent=True)
         except:
             pass
+        self._stop_all_proxy_cores(10804)
         if self._get_active_vless_uri():
             self._enable_plugin_proxy_flag()
             self._reset_vless_retry()
@@ -1472,36 +1465,13 @@ class AwgModeMixin:
                 self._awg_port = 0
                 return False
 
-            try:
-                self._vless_core.stop()
-            except:
-                pass
-            try:
-                self._tgws_core.stop()
-            except:
-                pass
-
-            if not _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05):
-                _log_diag("WARN", f"AmneziaWG: port {port} still busy before start, stopping any previous core")
-                try:
-                    self._awg_core.stop()
-                except:
-                    pass
-                _wait_vless_port_closed(port, timeout_sec=1.5, poll_sec=0.05)
+            self._stop_all_proxy_cores(port)
 
             _log_diag("INFO", f"AmneziaWG: starting core on local port {port}")
             err = self._awg_core.start(conf_content, port=port)
             if err and "address already in use" in str(err).lower():
                 _log_diag("WARN", f"AmneziaWG: port {port} busy on start, retrying after release...")
-                try:
-                    self._awg_core.stop()
-                except:
-                    pass
-                try:
-                    self._vless_core.stop()
-                except:
-                    pass
-                _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05)
+                self._stop_all_proxy_cores(port)
                 err = self._awg_core.start(conf_content, port=port)
             if err:
                 self._awg_running = False
@@ -1595,6 +1565,7 @@ class AwgModeMixin:
         self._vless_disconnect_with_reason("switch_to_awg_mode", silent=True)
         self._tgws_disconnect_with_reason("switch_to_awg_mode", silent=True)
         self._olcrtc_disconnect_with_reason("switch_to_awg_mode", silent=True)
+        self._stop_all_proxy_cores(10804)
         if not str(self._awg_conf_content or "").strip():
             self._enable_plugin_proxy_flag()
             self._ensure_awg_config_then_connect()
@@ -2050,7 +2021,7 @@ class OlcRtcModeMixin:
         port = int(OLCRTC_LOCAL_PORT)
 
         self._olcrtc_port = port
-        _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05)
+        self._stop_all_proxy_cores(target_port=port)
         self._olcrtc_start_in_progress = True
         self._set_olcrtc_last_log("handshake started", event="native_start_enter", generation=generation, port=port)
         try:
@@ -2058,11 +2029,7 @@ class OlcRtcModeMixin:
         finally:
             self._olcrtc_start_in_progress = False
         if err and "address already in use" in str(err).lower():
-            try:
-                self._stop_olcrtc_core_async()
-            except:
-                pass
-            _wait_vless_port_closed(port, timeout_sec=2.0, poll_sec=0.05)
+            self._stop_all_proxy_cores(target_port=port)
             self._olcrtc_start_in_progress = True
             try:
                 err = self._olcrtc_core.start(config_json)
@@ -2204,6 +2171,7 @@ class OlcRtcModeMixin:
         self._vless_disconnect_with_reason("switch_to_olcrtc_mode", silent=True)
         self._tgws_disconnect_with_reason("switch_to_olcrtc_mode", silent=True)
         self._awg_disconnect_with_reason("switch_to_olcrtc_mode", silent=True)
+        self._stop_all_proxy_cores(10804)
         if not self._is_olcrtc_config_ready():
             run_on_ui_thread(lambda: BulletinHelper.show_info("Заполните olcRTC"))
         else:
@@ -2414,22 +2382,17 @@ class TgWsModeMixin:
             generation = int(self._tgws_generation or 0)
         handed_off = False
         try:
-            try:
-                self._vless_disconnect_with_reason("tgws_connect_preempt", silent=True)
-            except:
-                pass
+            self._stop_all_proxy_cores(target_port=TGWS_LOCAL_PORT)
             self._tgws_ready = False
             if not self._should_run_tgws():
                 return False
-            port = _pick_tgws_port(TGWS_LOCAL_PORT)
-            if int(port or 0) <= 0:
-                self._tgws_running = False
-                self._tgws_ready = False
-                self._tgws_port = 0
-                return False
+            port = int(TGWS_LOCAL_PORT or 10804)
             self._tgws_port = port
             config_json = json.dumps({"port": int(port), "verbose": False, "dc_ip": dict(TGWS_DEFAULT_DC_IP)})
             err = self._tgws_core.start(config_json)
+            if err and "address already in use" in str(err).lower():
+                self._stop_all_proxy_cores(target_port=port)
+                err = self._tgws_core.start(config_json)
             if err:
                 self._tgws_running = False
                 self._tgws_ready = False
@@ -2596,6 +2559,7 @@ class TgWsModeMixin:
         self._vless_disconnect_with_reason("switch_to_tgws_mode", silent=True)
         self._awg_disconnect_with_reason("switch_to_tgws_mode", silent=True)
         self._olcrtc_disconnect_with_reason("switch_to_tgws_mode", silent=True)
+        self._stop_all_proxy_cores(10804)
         if self._is_plugin_proxy_enabled():
             self._tgws_connect()
         self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
@@ -6097,6 +6061,14 @@ Java.perform(function () {
         except:
             existing_local_proxy = None
 
+        if enable and existing_local_proxy is not None:
+            try:
+                if getattr(SharedConfig, "currentProxy", None) == existing_local_proxy and bool(getattr(SharedConfig, "proxyEnabled", False)) and self._is_local_proxy_applied(port):
+                    _log_diag("INFO", f"Native proxy settings already active on port {port}")
+                    return True
+            except:
+                pass
+
         if enable:
             proxy_obj = existing_local_proxy
             if proxy_obj is None:
@@ -6352,6 +6324,8 @@ Java.perform(function () {
         return self._is_local_proxy_applied(port, owner=OLCRTC_KIND)
 
     def _clear_local_socks_proxy_if_port(self, port, owner=None):
+        if bool(getattr(self, "_active", True)) and self._should_use_proxy():
+            return True
         try:
             expected_port = int(port or 0)
         except:
@@ -6371,6 +6345,33 @@ Java.perform(function () {
         except:
             return False
         return self._apply_local_socks_proxy(0, False, owner=target_owner, expected_port=expected_port)
+
+    def _stop_all_proxy_cores(self, target_port=10804):
+        try:
+            _stop_global_go_core()
+        except:
+            pass
+        try:
+            if getattr(self, "_vless_core", None) is not None:
+                self._vless_core.stop()
+        except:
+            pass
+        try:
+            if getattr(self, "_awg_core", None) is not None:
+                self._awg_core.stop()
+        except:
+            pass
+        try:
+            if getattr(self, "_olcrtc_core", None) is not None:
+                self._olcrtc_core.stop()
+        except:
+            pass
+        try:
+            if getattr(self, "_tgws_core", None) is not None:
+                self._tgws_core.stop()
+        except:
+            pass
+        _wait_vless_port_closed(target_port, timeout_sec=1.5, poll_sec=0.05)
 
     def _download_libvless_with_progress(self):
         return self._install_libsingbox_bundle(allow_network=True)
