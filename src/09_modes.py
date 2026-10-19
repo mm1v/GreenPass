@@ -7298,13 +7298,19 @@ Java.perform(function () {
         def _worker():
             ok = False
             try:
+                proxy_url = None
+                if self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False)):
+                    port = int(getattr(self, "_vless_port", 0) or 0)
+                    if port > 0:
+                        proxy_url = "http://127.0.0.1:%d" % port
+
                 if is_warp:
                     cfg_info = AWG_SOURCES_MAP.get(source, {})
                     filename = cfg_info.get("filename", WARP_CONF_NAME)
                     ep = cfg_info.get("endpoint", WARP_DEFAULT_ENDPOINT)
-                    text = generate_warp_conf(endpoint=ep)
+                    text = generate_warp_conf(endpoint=ep, proxy_url=proxy_url)
                 else:
-                    filename, text = self._fetch_vpgram_awg_config()
+                    filename, text = self._fetch_vpgram_awg_config(proxy_url=proxy_url)
                 self._awg_conf_name = filename
                 self._awg_conf_content = text
                 self._awg_conf_is_free = True
@@ -7332,7 +7338,7 @@ Java.perform(function () {
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _fetch_vpgram_awg_config(self):
+    def _fetch_vpgram_awg_config(self, proxy_url=None):
         device_seed = hashlib.sha1(("%s:%s" % (time.time(), random.random())).encode("utf-8")).hexdigest()[:16]
         req = urllib.request.Request(
             "https://web-api.vpgram.click/client-api/v1/download-anonymous-key",
@@ -7341,18 +7347,38 @@ Java.perform(function () {
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
-            raw = resp.read(256 * 1024)
-            text = raw.decode("utf-8", errors="ignore")
-            filename = "VPgram_Free.conf"
-            try:
-                cd = str(resp.headers.get("content-disposition", "") or "")
-                if "filename=" in cd:
-                    name = cd.split("filename=", 1)[1].strip("\"' ")
-                    if name:
-                        filename = name
-            except:
-                pass
+
+        def _do_fetch(purl):
+            handlers = []
+            if purl:
+                handlers.append(urllib.request.ProxyHandler({"http": purl, "https": purl}))
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+            opener = urllib.request.build_opener(*handlers)
+            with opener.open(req, timeout=12) as resp:
+                return resp.read(256 * 1024), str(resp.headers.get("content-disposition", "") or "")
+
+        raw = None
+        cd = ""
+        try:
+            raw, cd = _do_fetch(proxy_url)
+        except Exception:
+            if proxy_url:
+                try:
+                    raw, cd = _do_fetch(None)
+                except Exception:
+                    pass
+            if raw is None:
+                raise
+
+        text = raw.decode("utf-8", errors="ignore")
+        filename = "VPgram_Free.conf"
+        try:
+            if "filename=" in cd:
+                name = cd.split("filename=", 1)[1].strip("\"' ")
+                if name:
+                    filename = name
+        except:
+            pass
         if "[Interface]" not in text or "[Peer]" not in text:
             raise Exception("ответ не похож на .conf")
         return filename, text

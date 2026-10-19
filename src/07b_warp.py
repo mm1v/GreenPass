@@ -162,7 +162,7 @@ def _warp_parse_response(raw):
     return {"public_key": peer_key.strip(), "endpoint": endpoint.strip(), "v4": v4.strip(), "v6": v6.strip()}
 
 
-def register_warp(timeout=WARP_TIMEOUT):
+def register_warp(timeout=WARP_TIMEOUT, proxy_url=None):
     """Register a new anonymous WARP device. Returns a dict with the private key and the
     peer/interface data needed by build_warp_conf. Raises WarpError on any failure."""
     priv, pub = warp_generate_keypair()
@@ -184,18 +184,35 @@ def register_warp(timeout=WARP_TIMEOUT):
         headers={"Content-Type": "application/json", "User-Agent": WARP_USER_AGENT},
     )
     ctx = ssl.create_default_context()
+
+    def _do_request(purl):
+        handlers = []
+        if purl:
+            handlers.append(urllib.request.ProxyHandler({"http": purl, "https": purl}))
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        opener = urllib.request.build_opener(*handlers)
+        with opener.open(req, timeout=timeout) as resp:
+            return resp.read(WARP_MAX_RESPONSE + 1)
+
+    raw = None
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            raw = resp.read(WARP_MAX_RESPONSE + 1)
+        raw = _do_request(proxy_url)
     except ssl.SSLCertVerificationError:
         raise
     except Exception as exc:
-        reason = getattr(exc, "reason", None)
-        if isinstance(reason, ssl.SSLCertVerificationError):
-            raise reason
-        if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in str(exc):
-            raise WarpError("таймаут запроса к Cloudflare")
-        raise WarpError(str(reason or exc) or exc.__class__.__name__)
+        if proxy_url:
+            try:
+                raw = _do_request(None)
+            except Exception:
+                pass
+        if raw is None:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                raise reason
+            if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in str(exc):
+                raise WarpError("таймаут запроса к Cloudflare")
+            raise WarpError(str(reason or exc) or exc.__class__.__name__)
+
     if len(raw) > WARP_MAX_RESPONSE:
         raise WarpError("слишком большой ответ WARP")
     parsed = _warp_parse_response(raw)
@@ -226,9 +243,9 @@ def build_warp_conf(private_key, peer_public_key, endpoint, v4, v6, obfuscation=
     return "\n".join(lines)
 
 
-def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT):
+def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT, proxy_url=None):
     """Register and return the finished .conf text."""
-    reg = register_warp(timeout)
+    reg = register_warp(timeout=timeout, proxy_url=proxy_url)
     target_endpoint = str(endpoint or "").strip() or reg.get("endpoint") or WARP_DEFAULT_ENDPOINT
     return build_warp_conf(reg["private_key"], reg["public_key"], target_endpoint, reg["v4"], reg["v6"])
 
