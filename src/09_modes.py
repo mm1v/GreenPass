@@ -11,6 +11,125 @@ class SingBoxModeMixin:
         except:
             return SINGBOX_SO_FILE
 
+    def _libsingbox_lock_obj(self):
+        lock = getattr(self, "_libsingbox_validation_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._libsingbox_validation_lock = lock
+        return lock
+
+    @staticmethod
+    def _libsingbox_verified_path(path):
+        return str(path) + ".verified"
+
+    def _libsingbox_cached_validity(self, cache_key):
+        """True/False when the integrity of this exact file (path, size, mtime) is known, else None.
+
+        Only tiny sections run under the lock; the 126 MB hash never does. Known results
+        live in the instance, in the process (they survive a plugin reload) and in a small
+        <so>.verified file, so a cold start does not hash the library again."""
+        lock = self._libsingbox_lock_obj()
+        with lock:
+            cached = self._libsingbox_validation_cache
+            if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key:
+                return bool(cached[1])
+        try:
+            known = getattr(_GP_PROCESS_STATE, "so_validity", None)
+            if isinstance(known, dict) and cache_key in known:
+                valid = bool(known[cache_key])
+                with lock:
+                    self._libsingbox_validation_cache = (cache_key, valid)
+                return valid
+        except Exception:
+            pass
+        try:
+            with open(self._libsingbox_verified_path(cache_key[0]), "r") as handle:
+                record = json.load(handle)
+            if (
+                isinstance(record, dict)
+                and int(record.get("size", -1)) == int(cache_key[1])
+                and int(record.get("mtime_ns", -1)) == int(cache_key[2])
+                and str(record.get("sha256", "")) == str(SINGBOX_SO_SHA256)
+            ):
+                self._libsingbox_store_validity(cache_key, True, persist=False)
+                return True
+        except Exception:
+            pass
+        return None
+
+    def _libsingbox_store_validity(self, cache_key, valid, persist=True):
+        valid = bool(valid)
+        lock = self._libsingbox_lock_obj()
+        with lock:
+            self._libsingbox_validation_cache = (cache_key, valid)
+            # A file of the expected size whose hash differs is corrupt, not just an
+            # older build (older builds differ in size): never dlopen that one.
+            self._libsingbox_corrupt_key = None if valid else cache_key
+        try:
+            known = getattr(_GP_PROCESS_STATE, "so_validity", None)
+            if not isinstance(known, dict):
+                known = {}
+                _GP_PROCESS_STATE.so_validity = known
+            known[cache_key] = valid
+        except Exception:
+            pass
+        if valid and persist:
+            try:
+                tmp = "%s.%d.tmp" % (self._libsingbox_verified_path(cache_key[0]), threading.get_ident())
+                with open(tmp, "w") as handle:
+                    json.dump({"size": int(cache_key[1]), "mtime_ns": int(cache_key[2]), "sha256": str(SINGBOX_SO_SHA256)}, handle)
+                os.replace(tmp, self._libsingbox_verified_path(cache_key[0]))
+            except Exception:
+                pass
+
+    @staticmethod
+    def _libsingbox_cache_key(path):
+        stat = os.stat(path)
+        return (str(path), int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1000000000)))), int(stat.st_size)
+
+    def _libsingbox_prime_validity(self, path):
+        """The caller just verified this file (hash checked while unpacking): record it."""
+        try:
+            cache_key, size = self._libsingbox_cache_key(path)
+            if int(size) == int(SINGBOX_SO_SIZE):
+                self._libsingbox_store_validity(cache_key, True)
+                return True
+        except Exception:
+            pass
+        self._libsingbox_validation_cache = None
+        return False
+
+    def _libsingbox_is_corrupt(self):
+        """Right size but wrong hash: a damaged file that must not be mapped."""
+        try:
+            cache_key, _ = self._libsingbox_cache_key(self._libsingbox_so_path())
+            return getattr(self, "_libsingbox_corrupt_key", None) == cache_key
+        except Exception:
+            return False
+
+    def _libsingbox_core_load_allowed(self):
+        """Call off the UI thread. False when dlopen of the file on disk is unsafe."""
+        try:
+            if _gp_core_loaded_in_process():
+                return True
+            if self._libsingbox_addon_status() != "outdated":
+                return True
+            return not self._libsingbox_is_corrupt()
+        except Exception:
+            return True
+
+    def _core_needs_restart_notice(self):
+        """The library on disk is not the one this process already runs: a second Go
+        runtime would crash it, so only an app restart can switch."""
+        try:
+            if not (_gp_core_loaded_in_process() and bool(getattr(_GP_PROCESS_STATE, "go_core_blocked", False))):
+                return False
+            if not self._core_restart_required():
+                self._mark_core_restart_required()
+            return True
+        except Exception:
+            return False
+
     def _libsingbox_addon_status(self, quick=False):
         if not SINGBOX_BUNDLE_FILE:
             return "missing"
@@ -23,15 +142,11 @@ class SingBoxModeMixin:
                 return "missing"
             if int(stat.st_size) != int(SINGBOX_SO_SIZE):
                 return "outdated"
-            cache_key = (str(path), int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1000000000))))
-            lock = getattr(self, "_libsingbox_validation_lock", None)
-            if lock is None:
-                lock = threading.Lock()
-                self._libsingbox_validation_lock = lock
-            with lock:
-                cached = self._libsingbox_validation_cache
-                if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key:
-                    return "current" if cached[1] else "outdated"
+            cache_key, _ = self._libsingbox_cache_key(path)
+            lock = self._libsingbox_lock_obj()
+            cached = self._libsingbox_cached_validity(cache_key)
+            if cached is not None:
+                return "current" if cached else "outdated"
 
             if quick:
                 should_start = False
@@ -65,19 +180,25 @@ class SingBoxModeMixin:
                     threading.Thread(target=_validate_in_background, daemon=True).start()
                 return "checking"
 
-            with lock:
-                cached = self._libsingbox_validation_cache
-                if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key:
-                    return "current" if cached[1] else "outdated"
+            # Hashing is serialized by its own lock, never by the cache lock the UI thread uses.
+            hash_lock = getattr(self, "_libsingbox_hash_lock", None)
+            if hash_lock is None:
+                hash_lock = threading.Lock()
+                self._libsingbox_hash_lock = hash_lock
+            with hash_lock:
+                cached = self._libsingbox_cached_validity(cache_key)
+                if cached is not None:
+                    return "current" if cached else "outdated"
                 digest, size = self._sha256_file(path, max_bytes=int(SINGBOX_SO_SIZE))
                 valid = bool(size == int(SINGBOX_SO_SIZE) and digest == SINGBOX_SO_SHA256)
-                self._libsingbox_validation_cache = (cache_key, valid)
+                self._libsingbox_store_validity(cache_key, valid)
                 return "current" if valid else "outdated"
         except:
             return "missing"
 
     def _has_libsingbox_addon(self):
-        return self._libsingbox_addon_status() != "missing"
+        # quick: "checking" counts as present, so no caller (UI included) waits for a hash.
+        return self._libsingbox_addon_status(quick=True) != "missing"
 
     def _vless_disconnect_with_reason(self, reason, silent=False):
         self._vless_disconnect(silent=bool(silent))
@@ -88,16 +209,19 @@ class SingBoxModeMixin:
     def _vless_auto_subscription_nodes(self, uri=None):
         node = self._find_vless_node(uri if uri is not None else self._get_active_vless_uri())
         hidden = self._vless_browser_hidden_sources()
-        nodes = [
-            item for item in list((node or {}).get("balance_nodes", []) or [])
-            if isinstance(item, dict) and self._vless_browser_source_key(item) not in hidden
-        ]
+        all_nodes = [item for item in list((node or {}).get("balance_nodes", []) or []) if isinstance(item, dict)]
+        nodes = [item for item in all_nodes if self._vless_browser_source_key(item) not in hidden]
+        if not nodes and all_nodes:
+            # Every source is hidden: an empty Автовыбор would never connect again.
+            nodes = all_nodes
+            self._notify_all_sources_hidden()
         # ExitFy exposes failover as an explicit opt-in.  Keep the automatic
         # route deterministic when it is disabled instead of silently
         # rotating through every subscription node.
         if not self._vless_browser_failover_enabled() and nodes:
             return nodes[:1]
         return nodes
+
 
     def _vless_ping_value(self, node):
         try:
@@ -645,9 +769,27 @@ class SingBoxModeMixin:
             return False
         return True
 
+    def _notify_all_sources_hidden(self):
+        if getattr(self, "_all_sources_hidden_notified", False):
+            return
+        self._all_sources_hidden_notified = True
+        try:
+            run_on_ui_thread(lambda: BulletinHelper.show_info("Все источники скрыты — подключены все узлы"))
+        except:
+            pass
+
     def _vless_balancer_nodes(self):
-        groups = []
         hidden = self._vless_browser_hidden_sources()
+        selected = self._vless_balancer_nodes_for(hidden)
+        if not selected and hidden:
+            # Fall back to using every available source so the proxy never stays dead.
+            selected = self._vless_balancer_nodes_for(set())
+            if selected:
+                self._notify_all_sources_hidden()
+        return selected
+
+    def _vless_balancer_nodes_for(self, hidden):
+        groups = []
         for sub in list(self._vless_data.get("subs", []) or []):
             sub_url = str((sub or {}).get("url", "") or "").strip()
             if sub_url and sub_url in hidden:
@@ -700,49 +842,68 @@ class SingBoxModeMixin:
             if require_vless_mode:
                 self._set_vless_connection_state(False, "Перезапустите приложение для смены ядра")
             return
-        self._vless_core._ensure()
+
+        def _prepare_and_run():
+            # Hashing, dlopen of the ~120 MB library and downloads happen on this
+            # worker thread, never on the caller's (possibly UI) thread.
+            try:
+                self._prepare_vless_core_and_run(runner, require_vless_mode)
+            except Exception as exc:
+                error_text = "Ошибка прокси: %s" % exc
+                if require_vless_mode:
+                    self._set_vless_connection_state(False, error_text)
+
+        try:
+            threading.Thread(target=_prepare_and_run, daemon=True).start()
+        except Exception:
+            pass
+
+    def _prepare_vless_core_and_run(self, runner, require_vless_mode):
+        if self._libsingbox_core_load_allowed():
+            self._vless_core._ensure()
         if self._vless_core.is_available():
             if require_vless_mode and (not self._should_run_vless()):
                 return
-            threading.Thread(target=runner, daemon=True).start()
+            runner()
+            return
+        if self._core_needs_restart_notice():
+            if require_vless_mode:
+                self._set_vless_connection_state(False, "Перезапустите приложение для нового ядра")
+            BulletinHelper.show_info("Ядро обновлено — перезапустите приложение")
             return
         if self._vless_prepare_in_progress:
             return
 
         self._set_core_download_in_progress(True)
         BulletinHelper.show_info("Скачиваю ядро прокси...")
-
-        def _worker():
-            try:
-                ok = self._download_libvless_with_progress()
-                if ok and self._core_restart_required():
-                    if require_vless_mode:
-                        self._set_vless_connection_state(False, "Перезапустите приложение для нового ядра")
-                    run_on_ui_thread(lambda: BulletinHelper.show_success("Ядро установлено — перезапустите приложение"))
+        try:
+            ok = self._download_libvless_with_progress()
+            if ok and self._core_restart_required():
+                if require_vless_mode:
+                    self._set_vless_connection_state(False, "Перезапустите приложение для нового ядра")
+                BulletinHelper.show_success("Ядро установлено — перезапустите приложение")
+                return
+            self._reload_vless_core()
+            self._vless_core._ensure()
+            if ok and self._vless_core.is_available():
+                if require_vless_mode and (not self._should_run_vless()):
                     return
-                self._reload_vless_core()
-                self._vless_core._ensure()
-                if ok and self._vless_core.is_available():
-                    if require_vless_mode and (not self._should_run_vless()):
-                        return
-                    run_on_ui_thread(lambda: BulletinHelper.show_success("Ядро прокси готово"))
-                    try:
-                        runner()
-                    except Exception as e:
-                        error_text = f"Ошибка прокси: {e}"
-                        if require_vless_mode:
-                            self._set_vless_connection_state(False, error_text)
-                        else:
-                            run_on_ui_thread(lambda text=error_text: BulletinHelper.show_error(text))
-                else:
+                BulletinHelper.show_success("Ядро прокси готово")
+                try:
+                    runner()
+                except Exception as e:
+                    error_text = f"Ошибка прокси: {e}"
                     if require_vless_mode:
-                        self._set_vless_connection_state(False, "Не удалось загрузить ядро прокси")
+                        self._set_vless_connection_state(False, error_text)
                     else:
-                        run_on_ui_thread(lambda: BulletinHelper.show_error("Не удалось загрузить ядро прокси"))
-            finally:
-                self._set_core_download_in_progress(False)
-
-        threading.Thread(target=_worker, daemon=True).start()
+                        BulletinHelper.show_error(error_text)
+            else:
+                if require_vless_mode:
+                    self._set_vless_connection_state(False, "Не удалось загрузить ядро прокси")
+                else:
+                    BulletinHelper.show_error("Не удалось загрузить ядро прокси")
+        finally:
+            self._set_core_download_in_progress(False)
 
     def _add_vless_manual_node(self, uri):
         node = _proxy_node_from_uri(uri)
@@ -782,6 +943,25 @@ class SingBoxModeMixin:
                 self._vless_connect_worker_active = False
             self._set_vless_connection_state(False, "Не удалось запустить подключение")
             return False
+
+    def _prune_invalid_auto_nodes(self, nodes, port, username, password):
+        good = []
+        for node in list(nodes or []):
+            try:
+                cfg, _ = _build_registered_proxy_config(
+                    str((node or {}).get("uri", "") or ""),
+                    port,
+                    socks_username=username,
+                    socks_password=password,
+                )
+                if not cfg:
+                    continue
+                if self._validate_core_config_for_import(cfg, "node"):
+                    continue
+                good.append(node)
+            except Exception:
+                continue
+        return good
 
     def _vless_connect_once(self):
         if not self._should_run_vless():
@@ -936,27 +1116,58 @@ class SingBoxModeMixin:
             self._abort_vless_generation(generation, port)
             self._set_vless_connection_state(False, "Не удалось разобрать ссылку")
             return False
+
+        def _singbox_runtime_patch(config_text):
+            runtime_config = json.loads(config_text)
+            log_config = runtime_config.get("log")
+            log_config = dict(log_config) if isinstance(log_config, dict) else {}
+            log_config.update({"disabled": False, "level": "info"})
+            runtime_config["log"] = log_config
+            experimental = runtime_config.get("experimental")
+            experimental = dict(experimental) if isinstance(experimental, dict) else {}
+            cache_file = experimental.get("cache_file")
+            cache_file = dict(cache_file) if isinstance(cache_file, dict) else {}
+            cache_file["path"] = os.path.join(self._vless_dir, "singbox-cache.db")
+            experimental["cache_file"] = cache_file
+            runtime_config["experimental"] = experimental
+            return json.dumps(runtime_config)
+
+        def _auto_pruned_config(nodes):
+            can_prune = bool(use_sb and auto_nodes and len(auto_nodes) > 1 and not qwdtt_mode and not mihomo_mode
+                             and not is_file_config and not is_mihomo_config)
+            if not can_prune:
+                return None, None
+            good = self._prune_invalid_auto_nodes(nodes, port, username, password)
+            if not good or len(good) >= len(nodes):
+                return None, None
+            if len(good) > 1:
+                rebuilt = _build_singbox_balanced_config(good, port, socks_username=username, socks_password=password)
+            else:
+                rebuilt, _ = _build_registered_proxy_config(str(good[0].get("uri", "") or ""), port, socks_username=username, socks_password=password)
+            if not rebuilt:
+                return None, None
+            try:
+                return _singbox_runtime_patch(rebuilt), good
+            except Exception:
+                return None, None
+
         if use_sb and not qwdtt_mode and not mihomo_mode:
             try:
-                runtime_config = json.loads(single_config)
-                log_config = runtime_config.get("log")
-                log_config = dict(log_config) if isinstance(log_config, dict) else {}
-                log_config.update({"disabled": False, "level": "info"})
-                runtime_config["log"] = log_config
-                experimental = runtime_config.get("experimental")
-                experimental = dict(experimental) if isinstance(experimental, dict) else {}
-                cache_file = experimental.get("cache_file")
-                cache_file = dict(cache_file) if isinstance(cache_file, dict) else {}
-                cache_file["path"] = os.path.join(self._vless_dir, "singbox-cache.db")
-                experimental["cache_file"] = cache_file
-                runtime_config["experimental"] = experimental
-                single_config = json.dumps(runtime_config)
+                single_config = _singbox_runtime_patch(single_config)
             except Exception as exc:
                 self._abort_vless_generation(generation, port)
                 self._set_vless_connection_state(False, f"Ошибка конфига sing-box: {exc}")
                 return False
         if use_sb and not qwdtt_mode:
             validation_error = self._validate_core_config_for_import(single_config, mode_title)
+            if validation_error and str(validation_error).startswith("Ошибка конфига"):
+                retry_config, good_nodes = _auto_pruned_config(auto_nodes)
+                if retry_config:
+                    retry_error = self._validate_core_config_for_import(retry_config, mode_title)
+                    if not retry_error:
+                        single_config = retry_config
+                        auto_nodes = good_nodes
+                        validation_error = ""
             if validation_error:
                 self._abort_vless_generation(generation, port)
                 self._set_vless_connection_state(False, validation_error)
@@ -978,14 +1189,22 @@ class SingBoxModeMixin:
                     pass
                 return False
         else:
-            with self._vless_transition_lock:
-                if not self._same_vless_generation(generation) or not self._should_run_vless() or int(self._vless_port or 0) != int(port):
-                    return False
+            with self._vless_core_op_lock:
+                with self._vless_transition_lock:
+                    if not self._same_vless_generation(generation) or not self._should_run_vless() or int(self._vless_port or 0) != int(port):
+                        return False
                 err = self._vless_core.start(config_json)
+                if err and not any(token in str(err).lower() for token in ("address already in use", "eaddrinuse")):
+                    retry_config, good_nodes = _auto_pruned_config(auto_nodes)
+                    if retry_config:
+                        config_json = retry_config
+                        auto_nodes = good_nodes
+                        err = self._vless_core.start(config_json)
         bind_error = str(err or "").lower()
         if err and ("address already in use" in bind_error or "eaddrinuse" in bind_error):
             self._stop_all_proxy_cores(target_port=port)
-            err = self._vless_core.start(config_json)
+            with self._vless_core_op_lock:
+                err = self._vless_core.start(config_json)
             bind_error = str(err or "").lower()
         if err and ("address already in use" in bind_error or "eaddrinuse" in bind_error):
             if self._abort_vless_generation(generation, port):
@@ -1005,19 +1224,28 @@ class SingBoxModeMixin:
                 ready_timeout = max(ready_timeout, float(VLESS_RESUME_AUTO_READY_TIMEOUT_SEC))
             deadline = time.time() + ready_timeout
             local_ready = False
-            while time.time() < deadline:
+            final_pass = False
+            while True:
+                if (not final_pass) and time.time() >= deadline:
+                    if (not local_ready) or mihomo_mode or qwdtt_mode:
+                        break
+                    if not _check_vless_telegram_route(port, timeout=1.5, username=username, password=password):
+                        break
+                    final_pass = True
                 if not self._same_vless_generation(generation) or int(self._vless_port or 0) != int(port) or not self._should_run_vless():
                     return
                 if _check_vless_port(port) and _check_vless_socks_ready(port, timeout=0.5, username=username, password=password):
                     local_ready = True
                     allow_waking_auto = resume_reconnect and uri == VLESS_AUTO_SUBSCRIPTIONS_URI
-                    if (not qwdtt_mode) and (not allow_waking_auto) and not _check_vless_tunnel_ready(port, timeout=1.5, username=username, password=password):
+                    if (not qwdtt_mode) and (not allow_waking_auto) and (not final_pass) and not _check_vless_tunnel_ready(port, timeout=1.5, username=username, password=password):
                         time.sleep(0.3)
                         continue
-                    with self._vless_transition_lock:
-                        if not self._same_vless_generation(generation) or int(self._vless_port or 0) != int(port) or not self._should_run_vless():
-                            return
-                        applied = self._vless_apply_tg_proxy(port, True, username=username, password=password)
+                    if not self._same_vless_generation(generation) or int(self._vless_port or 0) != int(port) or not self._should_run_vless():
+                        return
+                    applied = self._vless_apply_tg_proxy(port, True, username=username, password=password)
+                    if applied and (not self._same_vless_generation(generation) or int(self._vless_port or 0) != int(port)):
+                        self._clear_local_socks_proxy_if_port(port, owner=VLESS_KIND)
+                        return
                     apply_deadline = time.time() + 1.5
                     while applied and time.time() < apply_deadline:
                         if not self._same_vless_generation(generation) or int(self._vless_port or 0) != int(port):
@@ -1037,11 +1265,21 @@ class SingBoxModeMixin:
                         self._vless_active_config_key = target_config_key
                         self._reset_vless_retry()
                         self._save_config()
-                    self._set_vless_connection_state(False, "")
+                    self._set_vless_connection_state(False, "Туннель не подтверждён" if final_pass else "")
                     return
+                if final_pass:
+                    break
                 time.sleep(0.3)
             if mihomo_mode and local_ready:
-                self._vless_retry_after = float("inf")
+                if not self._abort_vless_generation(generation, port):
+                    return
+                if (not is_mihomo_config) and self._vless_engine == VLESS_ENGINE_MIHOMO:
+                    try:
+                        self._vless_engine = VLESS_ENGINE_SINGBOX
+                        self._save_config()
+                        self._reset_vless_retry()
+                    except:
+                        pass
                 self._set_vless_connection_state(False, "Прокси не работает. Попробуйте переключиться на ядро sing-box")
                 return
             if not self._abort_vless_generation(generation, port):
@@ -1051,12 +1289,34 @@ class SingBoxModeMixin:
         threading.Thread(target=_watchdog, daemon=True).start()
         return True
 
+    def _stop_vless_core_for_generation(self, generation, background=None):
+        if background is None:
+            background = _gp_is_ui_thread()
+
+        def _stop():
+            try:
+                with self._vless_core_op_lock:
+                    if int(self._vless_generation or 0) != int(generation):
+                        return
+                    self._vless_core.stop()
+            except Exception:
+                pass
+
+        if background:
+            try:
+                threading.Thread(target=_stop, daemon=True).start()
+                return
+            except Exception:
+                pass
+        _stop()
+
     def _vless_disconnect(self, silent=False, cancel_pending=True):
         if cancel_pending:
             with self._vless_connect_lock:
                 self._vless_connect_pending = False
         with self._vless_transition_lock:
             self._vless_generation = int(self._vless_generation or 0) + 1
+            generation = int(self._vless_generation)
             old_port = int(self._vless_port or 0)
             old_owner = str(getattr(self, "_vless_local_owner", VLESS_KIND) or VLESS_KIND)
             self._vless_running = False
@@ -1067,12 +1327,12 @@ class SingBoxModeMixin:
             self._vless_socks_username = ""
             self._vless_active_config_key = ""
             self._vless_local_owner = VLESS_KIND
+        if old_port > 0:
             try:
-                self._vless_core.stop()
-            except:
-                pass
-            if old_port > 0:
                 self._clear_local_socks_proxy_if_port(old_port, owner=old_owner)
+            except Exception:
+                pass
+        self._stop_vless_core_for_generation(generation)
         if not silent:
             self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
 
@@ -1381,52 +1641,95 @@ class AwgModeMixin:
             return
         if self._go_core_switch_blocked("awg"):
             return
-        self._awg_core._ensure()
+
+        def _prepare_and_run():
+            try:
+                self._prepare_awg_core_and_run(runner, require_awg_mode)
+            except Exception as exc:
+                err_text = str(exc)
+                BulletinHelper.show_error("Ошибка AWG: %s" % err_text)
+
+        try:
+            threading.Thread(target=_prepare_and_run, daemon=True).start()
+        except Exception:
+            pass
+
+    def _prepare_awg_core_and_run(self, runner, require_awg_mode):
+        if self._libsingbox_core_load_allowed():
+            self._awg_core._ensure()
         if self._awg_core.is_available():
             if require_awg_mode and (not self._should_run_awg()):
                 return
-            threading.Thread(target=runner, daemon=True).start()
+            runner()
+            return
+        if self._core_needs_restart_notice():
+            BulletinHelper.show_info("Ядро обновлено — перезапустите приложение")
             return
         if self._awg_prepare_in_progress:
+            return
+        if time.monotonic() < float(getattr(self, "_awg_core_fail_until", 0.0) or 0.0):
             return
 
         self._awg_prepare_in_progress = True
         BulletinHelper.show_info("Скачиваю ядро AWG...")
-
-        def _worker():
-            try:
-                ok = self._has_libawg_addon()
-                if ok:
-                    self._reload_awg_core()
-                    self._awg_core._ensure()
-                    if not self._awg_core.is_available():
-                        try:
-                            os.remove(self._libawg_so_path())
-                            self._libsingbox_validation_cache = None
-                        except:
-                            pass
-                        ok = False
-                if not ok:
-                    ok = self._download_libawg_with_progress()
-                    if ok and self._core_restart_required():
-                        run_on_ui_thread(lambda: BulletinHelper.show_success("Ядро установлено — перезапустите приложение"))
+        try:
+            ok = self._has_libawg_addon()
+            if ok:
+                self._reload_awg_core()
+                self._awg_core._ensure()
+                if not self._awg_core.is_available():
+                    if self._core_needs_restart_notice():
+                        BulletinHelper.show_info("Ядро обновлено — перезапустите приложение")
                         return
-                    self._reload_awg_core()
-                    self._awg_core._ensure()
-                if not (ok and self._awg_core.is_available()):
-                    run_on_ui_thread(lambda: BulletinHelper.show_error("Не удалось загрузить ядро AWG"))
+                    status = self._libsingbox_addon_status()
+                    now_m = time.monotonic()
+                    if status == "current" or now_m - float(getattr(self, "_awg_core_redownload_ts", 0.0) or 0.0) < 600.0:
+                        self._awg_core_fail_until = now_m + 600.0
+                        BulletinHelper.show_error("Не удалось загрузить ядро AWG")
+                        return
+                    self._awg_core_redownload_ts = now_m
+                    try:
+                        os.remove(self._libawg_so_path())
+                        self._libsingbox_validation_cache = None
+                    except:
+                        pass
+                    ok = False
+            if not ok:
+                ok = self._download_libawg_with_progress()
+                if ok and self._core_restart_required():
+                    BulletinHelper.show_success("Ядро установлено — перезапустите приложение")
                     return
-                if require_awg_mode and (not self._should_run_awg()):
-                    return
-                try:
-                    runner()
-                except Exception as exc:
-                    err_text = str(exc)
-                    run_on_ui_thread(lambda err_text=err_text: BulletinHelper.show_error("Ошибка AWG: %s" % err_text))
-            finally:
-                self._awg_prepare_in_progress = False
+                self._reload_awg_core()
+                self._awg_core._ensure()
+            if not (ok and self._awg_core.is_available()):
+                BulletinHelper.show_error("Не удалось загрузить ядро AWG")
+                return
+            if require_awg_mode and (not self._should_run_awg()):
+                return
+            try:
+                runner()
+            except Exception as exc:
+                err_text = str(exc)
+                BulletinHelper.show_error("Ошибка AWG: %s" % err_text)
+        finally:
+            self._awg_prepare_in_progress = False
 
-        threading.Thread(target=_worker, daemon=True).start()
+    def _stop_awg_core(self, epoch):
+        def _stop():
+            try:
+                if int(getattr(self, "_awg_epoch", 0) or 0) != int(epoch):
+                    return
+                self._awg_core.stop()
+            except Exception:
+                pass
+
+        if _gp_is_ui_thread():
+            try:
+                threading.Thread(target=_stop, daemon=True).start()
+                return
+            except Exception:
+                pass
+        _stop()
 
     def _pick_awg_runtime_port(self):
         preferred = int(AWG_LOCAL_PORT)
@@ -1464,6 +1767,7 @@ class AwgModeMixin:
             if not self._should_run_awg():
                 self._awg_port = 0
                 return False
+            self._awg_epoch = int(getattr(self, "_awg_epoch", 0) or 0) + 1
 
             self._stop_all_proxy_cores(port)
 
@@ -1522,6 +1826,10 @@ class AwgModeMixin:
 
             self._save_config()
             _log_diag("INFO", f"AmneziaWG successfully connected on port {port}")
+            try:
+                self._on_awg_connected()
+            except Exception:
+                pass
             run_on_ui_thread(lambda: BulletinHelper.show_success("AmneziaWG подключен"))
             return True
         finally:
@@ -1534,6 +1842,10 @@ class AwgModeMixin:
 
     def _awg_disconnect(self, silent=False, reason="unknown", stop_core=True):
         _log_diag("INFO", f"AmneziaWG disconnect: reason={reason}, stop_core={stop_core}")
+        try:
+            self._stop_awg_health_loop()
+        except Exception:
+            pass
         old_port = int(self._awg_port or 0)
         if bool(stop_core):
             try:
@@ -2630,6 +2942,18 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         self._awg_conf_name = ""
         self._awg_conf_content = ""
         self._awg_config_downloading = False
+        self._awg_conf_is_free = False
+        self._awg_health_thread = None
+        self._awg_health_stop = threading.Event()
+        self._awg_health_gen = 0
+        self._awg_health_recovering = False
+        self._awg_health_restarts = 0
+        self._awg_health_hold_until = 0.0
+        self._awg_last_refresh_ts = 0.0
+        self._awg_refresh_failures = 0
+        self._awg_ipv4_only = False
+        self._ipv6_hook_installed = False
+        self._vless_core_op_lock = threading.Lock()
         self._olcrtc_port = 0
         self._olcrtc_running = False
         self._olcrtc_connecting = False
@@ -2837,9 +3161,14 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                     if isinstance(awg_data, dict):
                         self._awg_conf_name = str(awg_data.get("conf_name", "") or "")
                         self._awg_conf_content = str(awg_data.get("conf_content", "") or "")
+                        if "conf_is_free" in awg_data:
+                            self._awg_conf_is_free = bool(awg_data.get("conf_is_free"))
+                        else:
+                            self._awg_conf_is_free = _infer_awg_conf_is_free(self._awg_conf_name, self._awg_conf_content)
                     else:
                         self._awg_conf_name = ""
                         self._awg_conf_content = ""
+                        self._awg_conf_is_free = False
                     vless_data = data.get("vless_data", None)
                     if isinstance(vless_data, dict):
                         manual = vless_data.get("manual", [])
@@ -2947,6 +3276,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 "awg_data": {
                     "conf_name": str(self._awg_conf_name or ""),
                     "conf_content": str(self._awg_conf_content or ""),
+                    "conf_is_free": bool(self._awg_conf_is_free),
                 },
                 "vless_data": self._vless_data,
                 "olcrtc_data": {
@@ -3103,6 +3433,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
             "awg_data": {
                 "conf_name": str(self._awg_conf_name or ""),
                 "conf_content": str(self._awg_conf_content or ""),
+                "conf_is_free": bool(self._awg_conf_is_free),
             },
             "vless_data": self._vless_data,
             "olcrtc_data": {
@@ -6739,52 +7070,316 @@ Java.perform(function () {
             err_text = str(exc)
             run_on_ui_thread(lambda err_text=err_text: BulletinHelper.show_error("Ошибка чтения AWG: %s" % err_text))
 
-    def _download_free_awg_config(self):
+    # ---- AWG IPv4 and Health Check ----
+
+    @staticmethod
+    def _awg_conf_has_ipv6(conf_text):
+        section = ""
+        for raw in str(conf_text or "").splitlines():
+            line = str(raw or "").strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip().lower()
+                continue
+            if section != "interface" or "=" not in line:
+                continue
+            key, value = (part.strip() for part in line.split("=", 1))
+            if key.lower() == "address" and ":" in value:
+                return True
+        return False
+
+    def _update_awg_ipv4_state(self):
+        try:
+            conf = str(getattr(self, "_awg_started_conf", "") or self._awg_conf_content or "")
+            want = bool(
+                self._awg_running
+                and self._should_run_awg()
+                and conf.strip()
+                and not self._awg_conf_has_ipv6(conf)
+            )
+            old = bool(getattr(self, "_awg_ipv4_only", False))
+            self._awg_ipv4_only = want
+            if want:
+                self._install_ipv6_hook()
+                self._force_ipv4_strategy()
+            if want != old:
+                self._check_all_connections()
+        except Exception:
+            pass
+
+    def _on_awg_connected(self):
+        try:
+            self._update_awg_ipv4_state()
+        except Exception:
+            pass
+        try:
+            self._start_awg_health_loop()
+        except Exception:
+            pass
+
+    def _start_awg_health_loop(self):
+        try:
+            thread = self._awg_health_thread
+            if thread is not None and thread.is_alive() and not self._awg_health_stop.is_set():
+                return
+            self._awg_health_gen = int(self._awg_health_gen or 0) + 1
+            gen = int(self._awg_health_gen)
+            stop = threading.Event()
+            self._awg_health_stop = stop
+            thread = threading.Thread(target=self._awg_health_loop, args=(gen, stop), daemon=True)
+            self._awg_health_thread = thread
+            thread.start()
+        except Exception:
+            pass
+
+    def _stop_awg_health_loop(self):
+        try:
+            self._awg_health_gen = int(self._awg_health_gen or 0) + 1
+            self._awg_health_stop.set()
+            self._awg_health_thread = None
+        except Exception:
+            pass
+
+    def _awg_network_online(self):
+        try:
+            return bool(ApplicationLoader.isNetworkOnline())
+        except Exception:
+            return True
+
+    def _awg_probe_once(self):
+        def _recv_exact(sock, count):
+            data = b""
+            while len(data) < count:
+                chunk = sock.recv(count - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            return data
+
+        port = int(self._awg_port or AWG_LOCAL_PORT)
+        for host, dport in (("149.154.167.50", 443), ("149.154.175.50", 443)):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.settimeout(10.0)
+                    sock.connect((VLESS_LOCAL_HOST, port))
+                    sock.sendall(b"\x05\x01\x00")
+                    if _recv_exact(sock, 2) != b"\x05\x00":
+                        continue
+                    sock.sendall(b"\x05\x01\x00\x01" + socket.inet_aton(host) + int(dport).to_bytes(2, "big"))
+                    head = _recv_exact(sock, 4)
+                    if len(head) == 4 and head[0] == 5 and head[1] == 0:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _awg_health_loop(self, gen, stop):
+        fails = 0
+        stop.wait(5)
+        while (not stop.is_set()) and self._active and gen == int(self._awg_health_gen or 0):
+            delay = 60.0
+            try:
+                if (
+                    (not self._should_run_awg())
+                    or bool(self._awg_connecting)
+                    or (not self._awg_running)
+                    or bool(self._awg_health_recovering)
+                    or self._is_proxy_policy_suspended()
+                    or (not self._awg_network_online())
+                ):
+                    fails = 0
+                elif self._awg_probe_once():
+                    fails = 0
+                    self._awg_health_restarts = 0
+                    self._awg_refresh_failures = 0
+                elif not self._awg_network_online():
+                    fails = 0
+                else:
+                    fails += 1
+                    delay = 15.0
+                    if fails >= 3:
+                        fails = 0
+                        if not stop.is_set() and gen == int(self._awg_health_gen or 0):
+                            self._awg_health_recover()
+                        delay = 20.0
+            except Exception:
+                pass
+            stop.wait(delay)
+
+    def _awg_reconnect_async(self):
+        try:
+            if self._should_run_awg():
+                self._ensure_awg_core_then(self._awg_connect)
+        except Exception:
+            pass
+
+    def _awg_free_source(self):
+        try:
+            value = str(self.get_setting("awg_free_source", "vpgram") or "vpgram").strip().lower()
+        except Exception:
+            value = "vpgram"
+        return value if value in ("vpgram", "warp") else "vpgram"
+
+    def _awg_free_source_index(self):
+        return 1 if self._awg_free_source() == "warp" else 0
+
+    def _on_awg_free_source_changed(self, index):
+        try:
+            source = "warp" if int(index) == 1 else "vpgram"
+        except Exception:
+            source = "vpgram"
+        try:
+            self._set_setting_value("awg_free_source", source, reload_settings=False)
+        except Exception:
+            try:
+                self.set_setting("awg_free_source", source, reload_settings=False)
+            except Exception:
+                pass
+        if bool(self._awg_conf_is_free):
+            self._refresh_free_awg_config_from_settings(source=source)
+        return True
+
+    def _awg_download_and_wait(self, source=None):
+        done = threading.Event()
+        result = [False]
+
+        def _cb(ok):
+            result[0] = bool(ok)
+            done.set()
+
+        self._download_free_awg_config(refreshed=True, on_done=_cb, source=source)
+        done.wait(30)
+        return result[0]
+
+    def _awg_health_recover(self):
+        self._awg_health_recovering = True
+        try:
+            now = time.time()
+            backoff = min(600.0 * (2 ** int(self._awg_refresh_failures or 0)), 3600.0)
+            if bool(self._awg_conf_is_free) and now - float(self._awg_last_refresh_ts or 0.0) >= backoff:
+                self._awg_last_refresh_ts = now
+                self._awg_refresh_failures = int(self._awg_refresh_failures or 0) + 1
+                self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
+                if not self._awg_download_and_wait():
+                    self._awg_reconnect_async()
+                return
+            if int(self._awg_health_restarts or 0) < 1:
+                self._awg_health_restarts = 1
+                self._awg_disconnect(silent=True, reason="health_restart", stop_core=True)
+                self._awg_reconnect_async()
+                return
+            self._awg_health_restarts = 0
+            self._awg_health_hold_until = now + 600.0
+            self._awg_disconnect(silent=True, reason="health_dead", stop_core=True)
+            run_on_ui_thread(lambda: BulletinHelper.show_error("AWG сервер не отвечает"))
+            run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True, reload_stack=True))
+        except Exception:
+            pass
+        finally:
+            self._awg_health_recovering = False
+
+    def _refresh_free_awg_config_from_settings(self, source=None):
+        def _work():
+            self._awg_health_recovering = True
+            try:
+                self._awg_last_refresh_ts = time.time()
+                self._awg_health_hold_until = 0.0
+                if self._awg_running or bool(getattr(self._awg_core, "started", False)):
+                    self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
+                use_source = source if source is not None else self._awg_free_source()
+                if use_source == "warp":
+                    run_on_ui_thread(lambda: BulletinHelper.show_info("Регистрирую Cloudflare WARP..."))
+                else:
+                    run_on_ui_thread(lambda: BulletinHelper.show_info("Скачиваю новый конфиг AWG..."))
+                if not self._awg_download_and_wait(source=use_source):
+                    self._awg_reconnect_async()
+            except Exception:
+                pass
+            finally:
+                self._awg_health_recovering = False
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _download_free_awg_config(self, refreshed=False, on_done=None, source=None):
+        source = str(source or self._awg_free_source() or "vpgram").strip().lower()
+        if source not in ("vpgram", "warp"):
+            source = "vpgram"
+        is_warp = source == "warp"
+
+        def _done(ok):
+            if on_done is not None:
+                try:
+                    on_done(bool(ok))
+                except Exception:
+                    pass
+
         if bool(getattr(self, "_awg_config_downloading", False)):
+            _done(False)
             return
         self._awg_config_downloading = True
-        BulletinHelper.show_info("Получаю AWG конфиг...")
+        if not refreshed:
+            BulletinHelper.show_info("Регистрирую Cloudflare WARP..." if is_warp else "Получаю AWG конфиг...")
 
         def _worker():
+            ok = False
             try:
-                device_seed = hashlib.sha1(("%s:%s" % (time.time(), random.random())).encode("utf-8")).hexdigest()[:16]
-                req = urllib.request.Request(
-                    "https://web-api.vpgram.click/client-api/v1/download-anonymous-key",
-                    headers={"X-Device-Id": device_seed},
-                )
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-                with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
-                    raw = resp.read(256 * 1024)
-                    text = raw.decode("utf-8", errors="ignore")
-                    filename = "VPgram_Free.conf"
-                    try:
-                        cd = str(resp.headers.get("content-disposition", "") or "")
-                        if "filename=" in cd:
-                            name = cd.split("filename=", 1)[1].strip("\"' ")
-                            if name:
-                                filename = name
-                    except:
-                        pass
-                if "[Interface]" not in text or "[Peer]" not in text:
-                    raise Exception("ответ не похож на .conf")
+                if is_warp:
+                    filename = WARP_CONF_NAME
+                    text = generate_warp_conf()
+                else:
+                    filename, text = self._fetch_vpgram_awg_config()
                 self._awg_conf_name = filename
                 self._awg_conf_content = text
+                self._awg_conf_is_free = True
+                self._awg_health_restarts = 0
+                self._awg_health_hold_until = 0.0
                 self._save_config()
-                run_on_ui_thread(lambda: BulletinHelper.show_success("AWG конфиг получен"))
+                run_on_ui_thread(lambda: BulletinHelper.show_success("Конфиг AWG обновлён" if refreshed else "AWG конфиг получен"))
                 if self._is_awg_mode_selected():
                     self._enable_plugin_proxy_flag()
                     self._ensure_awg_core_then(self._awg_connect)
                 run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
+                ok = True
             except Exception as exc:
-                err_text = str(exc)
-                run_on_ui_thread(lambda err_text=err_text: BulletinHelper.show_error("Не удалось получить AWG: %s" % err_text))
+                reason = getattr(exc, "reason", None)
+                if isinstance(exc, ssl.SSLCertVerificationError) or isinstance(reason, ssl.SSLCertVerificationError):
+                    cert_msg = "Не удалось проверить сертификат сервера WARP" if is_warp else "Не удалось проверить сертификат сервера AWG"
+                    run_on_ui_thread(lambda cert_msg=cert_msg: BulletinHelper.show_error(cert_msg))
+                else:
+                    err_text = str(exc)
+                    fail_fmt = "Не удалось зарегистрировать WARP: %s" if is_warp else "Не удалось получить AWG: %s"
+                    run_on_ui_thread(lambda err_text=err_text, fail_fmt=fail_fmt: BulletinHelper.show_error(fail_fmt % err_text))
             finally:
                 self._awg_config_downloading = False
+                _done(ok)
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _fetch_vpgram_awg_config(self):
+        device_seed = hashlib.sha1(("%s:%s" % (time.time(), random.random())).encode("utf-8")).hexdigest()[:16]
+        req = urllib.request.Request(
+            "https://web-api.vpgram.click/client-api/v1/download-anonymous-key",
+            headers={"X-Device-Id": device_seed},
+        )
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            raw = resp.read(256 * 1024)
+            text = raw.decode("utf-8", errors="ignore")
+            filename = "VPgram_Free.conf"
+            try:
+                cd = str(resp.headers.get("content-disposition", "") or "")
+                if "filename=" in cd:
+                    name = cd.split("filename=", 1)[1].strip("\"' ")
+                    if name:
+                        filename = name
+            except:
+                pass
+        if "[Interface]" not in text or "[Peer]" not in text:
+            raise Exception("ответ не похож на .conf")
+        return filename, text
 
     def _clear_awg_config(self):
         self._awg_disconnect_with_reason("clear_awg_config", silent=True)
@@ -7301,6 +7896,8 @@ Java.perform(function () {
         self._install_proxy_button_hooks()
         self._install_sync_hooks()
         self._install_proxy_killswitch_hook()
+        if not self._ipv6_enabled():
+            self._install_ipv6_hook()
         self._install_awg_activity_result_hook()
         self._install_browser_vless_hook()
         self._install_voip_relay_link_hook()
@@ -7340,6 +7937,71 @@ Java.perform(function () {
                 run_on_ui_thread(lambda i=i: NotificationCenter.getInstance(i).postNotificationName(NotificationCenter.dialogsNeedReload))
 
             self._maybe_hide_proxy_sponsor_dialog()
+        except Exception:
+            pass
+
+    # ---- IPv6 policy ----
+
+    def _ipv6_enabled(self):
+        try:
+            return bool(self.get_setting("ipv6_enabled", True))
+        except Exception:
+            return True
+
+    def _active_account_ids(self):
+        ids = []
+        for account in range(int(UserConfig.MAX_ACCOUNT_COUNT)):
+            try:
+                if UserConfig.getInstance(account).isClientActivated():
+                    ids.append(account)
+            except Exception:
+                pass
+        return ids
+
+    def _should_force_ipv4(self):
+        try:
+            return (not self._ipv6_enabled()) or bool(getattr(self, "_awg_ipv4_only", False))
+        except Exception:
+            return False
+
+    def _force_ipv4_strategy(self):
+        for account in self._active_account_ids():
+            try:
+                ConnectionsManager.native_setIpStrategy(account, 0)
+            except Exception:
+                pass
+
+    def _check_all_connections(self):
+        def apply():
+            for account in self._active_account_ids():
+                try:
+                    ConnectionsManager.getInstance(account).checkConnection()
+                except Exception:
+                    pass
+        run_on_ui_thread(apply)
+
+    def _on_ipv6_changed(self, enabled):
+        try:
+            self.set_setting("ipv6_enabled", bool(enabled), reload_settings=False)
+        except Exception:
+            pass
+        if not enabled:
+            self._install_ipv6_hook()
+        self._check_all_connections()
+        run_on_ui_thread(lambda: BulletinHelper.show_info("IPv6 включён" if enabled else "IPv6 выключен"))
+
+    def _install_ipv6_hook(self):
+        if bool(getattr(self, "_ipv6_hook_installed", False)):
+            return
+        try:
+            cm_class = find_class("org.telegram.tgnet.ConnectionsManager")
+        except Exception:
+            cm_class = None
+        if cm_class is None:
+            return
+        try:
+            self.hook_all_methods(cm_class, "checkConnection", _Ipv6PolicyHook(self))
+            self._ipv6_hook_installed = True
         except Exception:
             pass
 
@@ -8076,6 +8738,10 @@ Java.perform(function () {
             pass
         self._active = False
         self._remove_settings_theme_observer()
+        try:
+            self._stop_awg_health_loop()
+        except:
+            pass
         try:
             self._worker_stop.set()
         except:

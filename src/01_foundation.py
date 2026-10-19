@@ -3,9 +3,9 @@
 __id__ = "GreenPass"
 __name__ = "GreenPass"
 __description__ = "Практически универсальный прокси плагин, поддержка протоколов vless/vmess/hysteria2/etc., встроенные tg-ws-proxy, AmneziaWG и olcrtc, а также полноценнымм проксированием звонков"
-__author__ = "@Altyplugins / Codex"
-__version__ = "2.5.7"
-__icon__ = "bratpass/0"
+__author__ = "@mm1vs"
+__version__ = "2.6.1"
+__icon__ = "monek_icons/0"
 __app_version__ = ">=12.5.1"
 __sdk_version__ = ">=1.4.5.3"
 
@@ -199,5 +199,80 @@ def _get_diagnostic_events_text():
         return "\n".join(events)
     except:
         return ""
+
+
+def _gp_is_ui_thread():
+    try:
+        from android.os import Looper
+        return bool(Looper.myLooper() == Looper.getMainLooper())
+    except Exception:
+        return threading.current_thread() is threading.main_thread()
+
+
+def _gp_run_on_ui_wait(fn, timeout=3.0):
+    """Run fn on the UI thread and wait for it, at most `timeout` seconds.
+
+    Returns (completed, result). Called on the UI thread it just runs fn. If the
+    wait times out before the UI thread started fn, fn is cancelled and will not
+    run later. Never raises.
+    """
+    if _gp_is_ui_thread():
+        try:
+            return True, fn()
+        except Exception:
+            return True, None
+    done = threading.Event()
+    state = {"cancel": False, "started": False, "result": None}
+    guard = threading.Lock()
+
+    def _run():
+        with guard:
+            if state["cancel"]:
+                return
+            state["started"] = True
+        try:
+            state["result"] = fn()
+        except Exception:
+            state["result"] = None
+        finally:
+            done.set()
+
+    try:
+        run_on_ui_thread(_run)
+    except Exception:
+        return False, None
+    if done.wait(float(timeout)):
+        return True, state["result"]
+    with guard:
+        if not state["started"]:
+            state["cancel"] = True
+            return False, None
+    # fn is already running on the UI thread; give it a short grace period.
+    if done.wait(1.0):
+        return True, state["result"]
+    return False, None
+
+
+def _gp_bulletin(method, text, args, kwargs):
+    # Bulletins touch views: worker threads must post them to the UI thread.
+    try:
+        label = Z(text)
+    except Exception:
+        label = str(text or "")
+
+    def _show():
+        try:
+            return method(label, *args, **kwargs)
+        except Exception:
+            return None
+
+    if _gp_is_ui_thread():
+        return _show()
+    try:
+        run_on_ui_thread(_show)
+    except Exception:
+        pass
+    return None
+
 
 

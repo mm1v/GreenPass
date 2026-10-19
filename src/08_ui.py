@@ -465,7 +465,8 @@ class SettingsUiMixin:
         if activity is None:
             BulletinHelper.show_info(Z("Доступно обновление") + (" GreenPass %s" % str(version)))
             return False
-        self._set_setting_value("plugin_autoupdate_prompted_version", str(version or ""), reload_settings=False)
+        # Not marked as "prompted" yet: only an actual install attempt does that,
+        # "Later" just snoozes for a day, so a failed/cancelled dialog never hides the release.
         builder = AlertDialogBuilder(activity)
         builder.set_title(Z("Доступно обновление"))
         builder.set_message(Z("GreenPass %s готов к установке.") % str(version))
@@ -475,10 +476,24 @@ class SettingsUiMixin:
                 dlg.dismiss()
             except:
                 pass
-            self._open_elyx_update_archive(archive_path)
+            if self._open_elyx_update_archive(archive_path):
+                try:
+                    self._set_setting_value("plugin_autoupdate_prompted_version", str(version or ""), reload_settings=False)
+                except:
+                    pass
+
+        def _later(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                self._set_setting_value("plugin_autoupdate_snooze_until", int(time.time()) + 24 * 3600, reload_settings=False)
+            except:
+                pass
 
         builder.set_positive_button(Z("Установить"), _install)
-        builder.set_negative_button(Z("Позже"), lambda dlg, which: dlg.dismiss())
+        builder.set_negative_button(Z("Позже"), _later)
         builder.show()
         return True
 
@@ -502,6 +517,16 @@ class SettingsUiMixin:
         return True
 
     def _check_core_update_now(self):
+        # The integrity check may hash the 126 MB library: never on the UI thread.
+        if _gp_is_ui_thread():
+            try:
+                threading.Thread(target=self._check_core_update_now_impl, daemon=True).start()
+                return True
+            except Exception:
+                pass
+        return self._check_core_update_now_impl()
+
+    def _check_core_update_now_impl(self):
         if self._vless_prepare_in_progress:
             BulletinHelper.show_info("Ядро уже загружается")
             return True
@@ -2071,6 +2096,21 @@ class SettingsUiMixin:
         except:
             return 20
 
+    def _sync_selector_index_setting(self, key, index):
+        # Selector keys hold only a list index; the real values live under their own keys.
+        # Rewriting the index before each build keeps a stale/out-of-range index from
+        # ever reaching the host's Selector.
+        try:
+            index = int(index)
+        except:
+            index = 0
+        try:
+            if self.get_setting(key, None) != index:
+                self._set_setting_value(key, index, reload_settings=False)
+        except:
+            pass
+        return index
+
     def _vless_browser_page_size_index(self):
         values = (10, 20, 40, 60)
         value = self._vless_browser_page_size_value()
@@ -3034,6 +3074,26 @@ class SettingsUiMixin:
                 on_click=lambda *a: self._download_free_awg_config(),
             ),
             Text(
+                text="Обновить бесплатный конфиг",
+                subtext="Скачать новый конфиг AWG",
+                icon="msg_retry",
+                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
+            ),
+            Selector(
+                key="awg_free_source_idx",
+                text="Бесплатный конфиг",
+                default=self._sync_selector_index_setting("awg_free_source_idx", self._awg_free_source_index()),
+                items=["VPgram", "Cloudflare WARP"],
+                icon="msg_list",
+                on_change=self._on_awg_free_source_changed,
+            ),
+            Text(
+                text="Сгенерировать новый WARP",
+                subtext="Новая регистрация Cloudflare WARP",
+                icon="msg_retry",
+                on_click=lambda *a: self._refresh_free_awg_config_from_settings(source="warp"),
+            ),
+            Text(
                 text="Выбрать .conf",
                 subtext=conf_name,
                 icon="msg_folders",
@@ -3125,6 +3185,14 @@ class SettingsUiMixin:
                 subtext="Направляет запросы других плагинов через GreenPass",
                 icon="msg_link",
                 on_change=self._on_plugins_proxy_changed,
+            ),
+            Switch(
+                key="ipv6_enabled",
+                text="IPv6",
+                default=bool(self._ipv6_enabled()),
+                subtext="Выключено — Telegram работает только по IPv4",
+                icon="msg_language",
+                on_change=self._on_ipv6_changed,
             ),
             Text(
                 text="Исключённые Wi-Fi сети",

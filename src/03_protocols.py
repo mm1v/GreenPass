@@ -1893,13 +1893,51 @@ def _build_singbox_awg_config(conf_text, local_port):
 
 
 
+_SB_UTLS_FINGERPRINTS = (
+    "chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android", "random", "randomized",
+)
+
+
+def _sb_normalize_fp(value):
+    fp = str(value or "").strip().lower()
+    return fp if fp in _SB_UTLS_FINGERPRINTS else "chrome"
+
+
+def _sb_reality_params_valid(params):
+    """Reality needs a 32-byte base64url public key and an even-length hex short id (<= 16)."""
+    try:
+        pbk = str((params or {}).get("pbk", "") or "").strip()
+        sid = str((params or {}).get("sid", "") or "").strip()
+        if not pbk:
+            return False
+        if len(base64.urlsafe_b64decode(pbk + "=" * (-len(pbk) % 4))) != 32:
+            return False
+        if len(sid) % 2 != 0 or not re.fullmatch(r"[0-9a-fA-F]{0,16}", sid):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _sb_normalize_vless_flow(flow):
+    """Return the flow sing-box accepts, or None when the node must be dropped."""
+    flow = str(flow or "").strip()
+    if not flow:
+        return ""
+    if flow.lower().startswith("xtls-rprx-vision"):
+        return "xtls-rprx-vision"
+    return None
+
+
 def _sb_tls(params, server=""):
     security = str((params or {}).get("security", "none") or "none").lower()
     if security == "none":
         return None
-    fp = str((params or {}).get("fp", "chrome") or "chrome")
-    if not fp:
-        fp = "chrome"
+    if security == "reality" and not _sb_reality_params_valid(params):
+        # Callers treat an exception as "node cannot be built"; the node is skipped
+        # instead of making the core reject the whole (balanced) config.
+        raise ValueError("invalid reality parameters")
+    fp = _sb_normalize_fp((params or {}).get("fp", "chrome"))
     tls = {
         "enabled": True,
         "server_name": str((params or {}).get("sni", "") or server or ""),
@@ -1917,6 +1955,7 @@ def _sb_tls(params, server=""):
             "short_id": str((params or {}).get("sid", "") or ""),
         }
     return tls
+
 
 
 def _sb_transport(params):
@@ -2022,6 +2061,54 @@ def _sb_ensure_tls_for_transport(tls, tr, params, server=""):
     }
 
 
+def _ss_plugin_from_params(params):
+    """Return (plugin, plugin_opts) for sing-box, ("", "") when absent, or
+    None when the plugin cannot be honoured."""
+    raw = str((params or {}).get("plugin", "") or "").strip()
+    if not raw:
+        return "", ""
+    name, _, opts = raw.partition(";")
+    name = name.strip().lower()
+    opts = opts.strip()
+    if name in ("obfs-local", "simple-obfs", "obfs"):
+        return "obfs-local", opts
+    if name == "v2ray-plugin":
+        return "v2ray-plugin", opts
+    return None
+
+
+def _sb_server_ports(main_port, spec):
+    """Convert a port-hopping spec ('443,20000-30000') to sing-box server_ports."""
+    ports = []
+    try:
+        main_port = int(main_port or 0)
+    except:
+        main_port = 0
+    items = []
+    if main_port > 0:
+        items.append("%d:%d" % (main_port, main_port))
+    for part in re.split(r"[,;]", str(spec or "")):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"^(\d+)\s*[-:]\s*(\d+)$", part)
+        if m:
+            lo, hi = int(m.group(1)), int(m.group(2))
+        elif part.isdigit():
+            lo = hi = int(part)
+        else:
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
+        if lo < 1 or hi > 65535:
+            continue
+        items.append("%d:%d" % (lo, hi))
+    for item in items:
+        if item not in ports:
+            ports.append(item)
+    return ports if len(ports) > 1 else []
+
+
 def _build_singbox_config(uri_str, local_port, socks_username="", socks_password=""):
     if _is_sudoku_uri(uri_str):
         details = _parse_sudoku_uri_details(uri_str)
@@ -2118,6 +2205,14 @@ def _build_singbox_config(uri_str, local_port, socks_username="", socks_password
                 "method": str(details.get("method", "") or ""),
                 "password": str(details.get("password", "") or ""),
             }]
+            plugin = _ss_plugin_from_params(details.get("params", {}))
+            if plugin is None:
+                return None, None
+            plugin_name, plugin_opts = plugin
+            if plugin_name:
+                cfg["outbounds"][0]["plugin"] = plugin_name
+                if plugin_opts:
+                    cfg["outbounds"][0]["plugin_opts"] = plugin_opts
             return json.dumps(cfg), str(details.get("name", "SS узел") or "SS узел")
         except:
             return None, None
@@ -2197,6 +2292,13 @@ def _build_singbox_config(uri_str, local_port, socks_username="", socks_password
             obfps = str(params.get("fp", "") or "")
             if obfps:
                 ob["tls"]["utls"] = {"enabled": True, "fingerprint": obfps}
+            hop_ports = _sb_server_ports(ob.get("server_port", 0), params.get("mport", params.get("ports", "")))
+            if hop_ports:
+                ob.pop("server_port", None)
+                ob["server_ports"] = hop_ports
+                hop_interval = str(params.get("hop-interval", params.get("hop_interval", "")) or "").strip()
+                if hop_interval.isdigit() and int(hop_interval) > 0:
+                    ob["hop_interval"] = hop_interval + "s"
             obfs_type = str(params.get("obfs", "") or "").strip()
             obfs_password = str(params.get("obfs-password", params.get("obfs_password", "")) or "")
             if obfs_type:
@@ -2219,6 +2321,7 @@ def _build_singbox_config(uri_str, local_port, socks_username="", socks_password
             return json.dumps(cfg), str(details.get("name", "Hysteria2 узел") or "Hysteria2 узел")
         except:
             return None, None
+
 
     if _is_tuic_uri(uri_str):
         details = _parse_tuic_uri_details(uri_str)
@@ -2405,13 +2508,16 @@ def _build_singbox_config(uri_str, local_port, socks_username="", socks_password
     try:
         params = dict(details.get("params", {}) or {})
         cfg = _sb_base_config(local_port, socks_username, socks_password)
+        flow = _sb_normalize_vless_flow(params.get("flow", ""))
+        if flow is None:
+            return None, None
         ob = {
             "type": "vless",
             "tag": "proxy",
             "server": str(details.get("server", "") or ""),
             "server_port": int(details.get("port", 0) or 0),
             "uuid": str(details.get("uuid", "") or ""),
-            "flow": str(params.get("flow", "") or ""),
+            "flow": flow,
         }
         pe = str(params.get("packetEncoding", "") or "").strip()
         if pe:
@@ -2440,12 +2546,18 @@ def _build_singbox_balanced_config(nodes, local_port, socks_username="", socks_p
     outbounds = []
     for node in list(nodes or [])[:VLESS_BALANCER_MAX_NODES]:
         try:
-            uri = str(node.get("uri", "") if isinstance(node, dict) else node or "")
-            raw, _ = _build_registered_proxy_config(uri, local_port, socks_username=socks_username, socks_password=socks_password)
-            if not raw:
-                continue
-            obs = json.loads(raw).get("outbounds") or []
-            ob = next((o for o in obs if o.get("tag") == "proxy"), None)
+            if isinstance(node, dict) and str(node.get("kind", "") or "").strip().lower() == "singbox-config":
+                file_obs = json.loads(str(node.get("raw_config", "") or "{}")).get("outbounds") or []
+                ob = dict(file_obs[0]) if file_obs and isinstance(file_obs[0], dict) and not file_obs[0].get("detour") else None
+                if not ob:
+                    continue
+            else:
+                uri = str(node.get("uri", "") if isinstance(node, dict) else node or "")
+                raw, _ = _build_registered_proxy_config(uri, local_port, socks_username=socks_username, socks_password=socks_password)
+                if not raw:
+                    continue
+                obs = json.loads(raw).get("outbounds") or []
+                ob = next((o for o in obs if o.get("tag") == "proxy"), None)
             if not ob:
                 continue
             tag = "sb-route-%d" % (len(outbounds) + 1)
@@ -2662,5 +2774,23 @@ _TGWS_IP_TO_DC = {
     "91.105.192.100": (203, False),
 }
 
+
+def _infer_awg_conf_is_free(conf_name, conf_text):
+    """Old installs have no stored flag: the free VPgram download is recognised by its file name
+    (default VPgram_Free.conf) or the generated Cloudflare_WARP.conf, or, with an empty name, by a vpgram Endpoint host."""
+    name = str(conf_name or "").strip().lower()
+    if name:
+        # "Cloudflare_WARP.conf" is the exact name our own WARP generator writes.
+        return "vpgram" in name or name == "cloudflare_warp.conf"
+    if not str(conf_text or "").strip():
+        return False
+    for raw in str(conf_text).splitlines():
+        line = raw.strip()
+        if line.lower().startswith("endpoint") and "=" in line:
+            return "vpgram" in line.split("=", 1)[1].lower()
+    return False
+
+
 __all__ = [name for name in globals() if not name.startswith("__")]
+
 

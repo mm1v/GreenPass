@@ -12,6 +12,7 @@ FILES_TO_MERGE = [
     "src/05_native.py",
     "src/06_subscriptions.py",
     "src/07_hooks.py",
+    "src/07b_warp.py",
     "src/08_ui.py",
     "src/09_modes.py",
     "src/10_webproxy.py",
@@ -23,7 +24,7 @@ OUTPUT_ELYX = "GreenPass.elyx"
 def build():
     print("Starting build...")
     output_content = []
-    version_str = "2.5.14"
+    version_str = "2.6.1"
 
     for file_path in FILES_TO_MERGE:
         if not os.path.exists(file_path):
