@@ -866,12 +866,28 @@ def _get_free_port():
 
 
 def _pick_tgws_port(preferred=None, excluded=None):
+    used = set(int(x) for x in list(TGWS_RESERVED_PORTS or []))
     try:
         preferred_port = int(preferred or 0)
     except:
         preferred_port = 0
-    if preferred_port > 0:
+    if excluded:
+        try:
+            for value in excluded:
+                try:
+                    used.add(int(value))
+                except:
+                    pass
+        except:
+            pass
+    if preferred_port > 0 and preferred_port not in used and _wait_vless_port_closed(preferred_port, timeout_sec=0.05, poll_sec=0.05):
         return preferred_port
-    return int(TGWS_LOCAL_PORT or 10804)
+    for _ in range(32):
+        candidate = _get_free_port()
+        if candidate in used:
+            continue
+        if _wait_vless_port_closed(candidate, timeout_sec=0.05, poll_sec=0.05):
+            return int(candidate)
+    return 0
 
 __all__ = [name for name in globals() if not name.startswith("__")]

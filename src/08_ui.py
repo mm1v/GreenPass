@@ -2606,16 +2606,10 @@ class SettingsUiMixin:
             except:
                 port = 0
             try:
-                local_ready = bool(port > 0 and self._is_local_tgws_proxy_applied(port))
-                ready = bool(local_ready and self._tgws_telegram_is_connected())
+                ready = bool(port > 0 and self._is_local_tgws_proxy_applied(port))
             except:
                 ready = False
-                local_ready = False
-            busy = (
-                bool(getattr(self, "_tgws_connecting", False))
-                or (bool(getattr(self, "_tgws_running", False)) and not local_ready)
-                or (local_ready and not ready)
-            )
+            busy = bool(getattr(self, "_tgws_connecting", False)) or (bool(getattr(self, "_tgws_running", False)) and not ready)
         elif target == AWG_KIND:
             ready = bool(self._is_awg_connection_ready())
             busy = (
@@ -3154,6 +3148,30 @@ class SettingsUiMixin:
                 icon="msg_download_settings",
                 on_click=lambda *a: self._download_olcrtc_addon(),
             ))
+        items.extend([
+            Divider(),
+            Header(text="Звонки (Voice Relay)"),
+            Switch(
+                key="tgws_voip_relay_enabled",
+                text="Звонки через Relay",
+                default=bool(self._get_tgws_voip_relay_enabled()),
+                subtext="Обход блокировки голосовых звонков",
+                icon="msg_calls",
+                on_change=self._set_tgws_voip_relay_enabled,
+            ),
+            Text(
+                text="Параметры Voice Relay",
+                subtext="Сервер, порт и ключ шифрования",
+                icon="msg_settings",
+                create_sub_fragment=self._create_voice_relay_subpage,
+            ),
+            Text(
+                text="Скопировать tg://relay",
+                subtext="Ссылка на текущий Relay сервер",
+                icon="msg_link",
+                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
+            ),
+        ])
         return items
 
     def _build_active_mode_items(self):
@@ -3199,20 +3217,6 @@ class SettingsUiMixin:
                 subtext=self._excluded_wifi_menu_subtext(),
                 icon="msg_list",
                 create_sub_fragment=self._create_excluded_wifi_subpage,
-            ),
-            Divider(),
-            Header(text="Звонки (Voice Relay)"),
-            Text(
-                text="Параметры Voice Relay",
-                subtext="Сервер, порт и ключ шифрования",
-                icon="msg_settings",
-                create_sub_fragment=self._create_voice_relay_subpage,
-            ),
-            Text(
-                text="Скопировать tg://relay",
-                subtext="Ссылка на текущий Relay сервер",
-                icon="msg_link",
-                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
             ),
             Divider(),
             Header(text="Ядро и прокси"),
@@ -3374,22 +3378,6 @@ class SettingsUiMixin:
         if runtime_state == "paused":
             return "⏸️ " + Z("Приостановлен")
         if runtime_state == "connecting":
-            if target == AWG_KIND:
-                try:
-                    port = int(getattr(self, "_awg_port", 0) or AWG_LOCAL_PORT)
-                    local_applied = bool(self._is_local_proxy_applied(port, owner=AWG_KIND))
-                    if local_applied and bool(getattr(self, "_awg_running", False)) and not bool(getattr(self, "_awg_tunnel_ready", False)):
-                        return "🟡 " + Z("Прокси включён, туннель не подтверждён")
-                except:
-                    pass
-            elif target == TGWS_KIND:
-                try:
-                    port = int(getattr(self, "_tgws_port", 0) or TGWS_LOCAL_PORT)
-                    local_applied = bool(self._is_local_tgws_proxy_applied(port))
-                    if local_applied and bool(getattr(self, "_tgws_running", False)) and not self._tgws_telegram_is_connected():
-                        return "🟡 " + Z("Локальный прокси включён, Telegram переподключается")
-                except:
-                    pass
             return "🟡 " + Z("Подключение…")
         if runtime_state == "connected":
             latency = self._settings_main_mode_latency(target)
@@ -3684,20 +3672,12 @@ class SettingsUiMixin:
                 icon="msg_secret",
                 on_change=self._on_dont_use_with_vpn_changed,
             ))
-            settings.append(Switch(
-                key="tgws_voip_relay_enabled",
-                text="Звонки через Relay",
-                default=bool(self._get_tgws_voip_relay_enabled()),
-                subtext="Обход блокировки голосовых звонков",
-                icon="msg_calls",
-                on_change=self._set_tgws_voip_relay_enabled,
-            ))
 
             settings.append(Divider())
             settings.append(Header(text="Дополнительно"))
             settings.append(Text(
                 text="Расширенные настройки",
-                subtext="Сети, ядро, Voice Relay, перенос",
+                subtext="Сети, ядро, IPv6, перенос",
                 icon="msg_settings",
                 create_sub_fragment=self._create_greenpass_extra_subpage,
             ))
