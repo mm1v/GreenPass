@@ -24,7 +24,7 @@ OUTPUT_ELYX = "GreenPass.elyx"
 def build():
     print("Starting build...")
     output_content = []
-    version_str = "2.6.1"
+    version_str = "3.0.0"
 
     for file_path in FILES_TO_MERGE:
         if not os.path.exists(file_path):

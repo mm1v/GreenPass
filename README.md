@@ -1,80 +1,67 @@
-# GreenPass Elyx
+# GreenPass (Fork by @mm1vs)
 
-Structured Elyx package for GreenPass. The sources under `plugin/` are the
-primary codebase. The same sources can also be flattened into `GreenPass.plugin`
-for exteraGram installations without Elyx support.
+> Практически универсальный прокси-плагин для **exteraGram**: поддержка VLESS / Trojan / Shadowsocks (sing-box), Telegram WebSocket (TG WS), olcRTC (WebRTC) и AmneziaWG с проксированием звонков.
 
-Targets the current [exteraGram plugin SDK](https://plugins.exteragram.app/docs):
+---
 
-| Build | App | SDK | Metadata |
-| --- | --- | --- | --- |
-| Elyx (`.eaf`) | `>=12.5.1` | `>=1.4.5.3` | `plugin/meta.yml` |
-| Legacy (`.plugin`) | `>=12.5.1` | `>=1.4.5.3` | top of `plugin/greenpass/foundation.py` |
+## 📌 Зачем вообще нужен этот плагин?
 
-## Runtime dependencies
+В условиях постоянных блокировок, замедлений (DPI / ТСПУ) и сбоев Telegram (когда не грузятся медиа, кружки, голосовые сообщения или не работают звонки) большинство пользователей вынуждены держать постоянно включенным сторонний VPN-клиент (V2rayNG, Amnezia, Happ и др.). 
 
-The Elyx archive bundles the pinned, pure-Python HTTPX and HTTP/2 wheels under
-`plugin/wheels`. Elyx installs them in GreenPass's private library directory,
-so users do not need to install packages from PyPI. The legacy single-file
-plugin keeps HTTP/2 optional and falls back to WebSocket when those libraries
-are unavailable.
+**GreenPass решает эту проблему прямо внутри клиента exteraGram:**
 
-## Build on Windows
+1. **Не жрёт батарею и оперативную память**: не нужно держать отдельное VPN-приложение в фоне — весь проксирующий стек встроен прямо в процесс Telegram.
+2. **Все ключевые протоколы в одном месте**:
+   - **VLESS / VMess / Trojan / Shadowsocks** — полноценная работа через встроенное ядро `sing-box` с поддержкой Reality и gRPC.
+   - **TG WS (WebSocket)** — встроенный лёгкий транспорт для быстрого подключения к прокси-серверам Telegram.
+   - **olcRTC** — проксирование через WebRTC, включая возможность пускать звонки через защищённые Relay.
+   - **AmneziaWG** — WireGuard с обфускацией параметров.
+3. **Автоматизация и интеграция**: поддержка подписок по URL, импорт конфигураций кликом по ссылке из сообщений, отображение пинга, автовыбор лучшего сервера и переключение на уровне системы.
 
-Run `build.bat` (needs Python 3.10+, ideally 3.11). It installs ElyxBuilder and
-writes `builds/GreenPass.elyx` and `builds/GreenPass.plugin`.
+---
 
-`build.bat release` also publishes them as GitHub release `v<version>` through
-the [GitHub CLI](https://cli.github.com) (`gh auth login` first; the current
-commit must be pushed). On other systems: `python scripts/build_release.py
-[--release]`.
+## ⚡ Что меняет этот форк относительно оригинала?
 
-## Build with ElyxBuilder
+Оригинальный плагин имел устаревший, перегруженный интерфейс и проблемы со стабильностью. В этом форке:
 
-Install [ElyxBuilder](https://plugins.exteragram.app/docs/elyx/elyxbuilder)
-(Python 3.10+; compiled builds need Python 3.11):
+* **Интеграция с Pill Stack (быстрое переключение режима)**:
+  - При долгом нажатии на стопку плашек (**Pill Stack**) в верхней панели или на значок прокси в списке чатов сразу открывается меню смены режима (**VLESS**, **TG WS**, **AmneziaWG**, **olcRTC**). Больше не нужно заходить в настройки плагина.
+* **Переработанный современный UI**:
+  - Полностью обновлена Hero-карточка со статусом подключения и пингом в нативном стиле Telegram.
+  - Убрано устаревшее всплывающее меню *«More and core»* при клике на плашку режима.
+  - Убрана назойливая техническая приписка `(sing-box)` у VLESS.
+* **Логичные настройки звонков и olcRTC**:
+  - Опции «Звонки через Relay» перенесены в соответствующий блок настроек **olcRTC**, а быстрый переключатель вынесен прямо на главную страницу настроек.
+* **Новое окно обновлений**:
+  - Вся ключевая информация (версия плагина, архитектура, статус ядра) сгруппирована вверху.
+  - Автообновление сделано компактным чекбоксом в одну строчку вместо неудобных радиокнопок.
+  - Кнопка проверки обновлений вынесена в отдельное аккуратное действие.
+* **Исправление задержек и стабильности**:
+  - Устранены рассинхроны статусов («Подключено» / «Отключено») при смене сетей и серверов.
+  - Оптимизированы фоновые потоки и устранены зависания индикаторов подключения.
 
-```sh
-python -m pip install --upgrade ElyxBuilder
+---
+
+## ⚠️ Важно: Блокировки AmneziaWG (AWG) в РФ
+
+> [!WARNING]
+> **Протокол AmneziaWG (AWG) и стандартный WireGuard на территории РФ подвергаются массовым блокировкам ТСПУ/РКН.**
+> На мобильных сетях (МТС, Мегафон, Билайн, Т2) и у большинства провайдеров домашнего интернета UDP handshake глушится, из-за чего AWG зависает на бесконечном подключении или вовсе не передаёт трафик.
+
+**Рекомендация для пользователей из РФ:**
+* Используйте **VLESS (XTLS-Reality)** — трафик полностью маскируется под обычный TLS 1.3 к разрешённым сайтам и не детектируется ТСПУ.
+* Используйте **TG WS** или **olcRTC** — трафик идёт через стандартные веб-порты по протоколам WebSocket / WebRTC, которые не блокируются.
+
+---
+
+## 🛠️ Сборка плагина
+
+Для сборки требуется установленный Python 3.10+:
+
+```bash
+python build.py
 ```
 
-From the repository root (the directory with `refmap.yml`):
-
-```sh
-# source build with syntax check
-elyb build --ast -v -nf
-
-# compiled build (.pyc, optimization level 2)
-elyb build -c 2 -v -nf
-```
-
-Archives are written to `builds/`.
-
-Build the legacy single-file plugin from the same sources:
-
-```sh
-python scripts/build_legacy_plugin.py plugin builds/GreenPass.plugin
-```
-
-## Releases
-
-`build.bat release` (above) or `.github/workflows/release.yml` (on a `v*` tag
-push or a manual run) builds both files and publishes release `v<version>`
-(from `version` in `plugin/meta.yml`). Notes come from
-`release-notes/v<version>.md` when that file exists.
-
-## Build with the PowerShell scripts
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-greenpass-elyx.ps1
-```
-
-The output is `builds/GreenPass.elyx`.
-
-Build the legacy single-file plugin:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-greenpass-legacy-plugin.ps1
-```
-
-The legacy builder also accepts a built `GreenPass.elyx` as `-SourcePath`.
+Команда генерирует:
+- `GreenPass.plugin` — единый файл плагина для exteraGram.
+- `GreenPass.elyx` — пакет для пакетного менеджера Elyx.
