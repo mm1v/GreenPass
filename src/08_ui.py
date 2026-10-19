@@ -3161,30 +3161,6 @@ class SettingsUiMixin:
                 icon="msg_download_settings",
                 on_click=lambda *a: self._download_olcrtc_addon(),
             ))
-        items.extend([
-            Divider(),
-            Header(text="Звонки (Voice Relay)"),
-            Switch(
-                key="tgws_voip_relay_enabled",
-                text="Звонки через Relay",
-                default=bool(self._get_tgws_voip_relay_enabled()),
-                subtext="Обход блокировки голосовых звонков",
-                icon="msg_calls",
-                on_change=self._set_tgws_voip_relay_enabled,
-            ),
-            Text(
-                text="Параметры Voice Relay",
-                subtext="Сервер, порт и ключ шифрования",
-                icon="msg_settings",
-                create_sub_fragment=self._create_voice_relay_subpage,
-            ),
-            Text(
-                text="Скопировать tg://relay",
-                subtext="Ссылка на текущий Relay сервер",
-                icon="msg_link",
-                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
-            ),
-        ])
         return items
 
     def _build_active_mode_items(self):
@@ -3230,6 +3206,28 @@ class SettingsUiMixin:
                 subtext=self._excluded_wifi_menu_subtext(),
                 icon="msg_list",
                 create_sub_fragment=self._create_excluded_wifi_subpage,
+            ),
+            Divider(),
+            Header(text="Звонки (Voice Relay)"),
+            Switch(
+                key="tgws_voip_relay_enabled",
+                text="Звонки через Relay",
+                default=bool(self._get_tgws_voip_relay_enabled()),
+                subtext="Обход блокировки голосовых звонков",
+                icon="msg_calls",
+                on_change=self._set_tgws_voip_relay_enabled,
+            ),
+            Text(
+                text="Параметры Voice Relay",
+                subtext="Сервер, порт и ключ шифрования",
+                icon="msg_settings",
+                create_sub_fragment=self._create_voice_relay_subpage,
+            ),
+            Text(
+                text="Скопировать tg://relay",
+                subtext="Ссылка на текущий Relay сервер",
+                icon="msg_link",
+                on_click=lambda *a: self._copy_tgws_voip_relay_link(),
             ),
             Divider(),
             Header(text="Ядро и прокси"),
@@ -3704,7 +3702,7 @@ class SettingsUiMixin:
             settings.append(Header(text="Дополнительно"))
             settings.append(Text(
                 text="Расширенные настройки",
-                subtext="Сети, ядро, IPv6, перенос",
+                subtext="Сети, ядро, Voice Relay, перенос",
                 icon="msg_settings",
                 create_sub_fragment=self._create_greenpass_extra_subpage,
             ))
