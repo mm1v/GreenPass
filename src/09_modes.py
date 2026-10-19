@@ -7170,19 +7170,24 @@ Java.perform(function () {
 
     def _awg_free_source(self):
         try:
-            value = str(self.get_setting("awg_free_source", "vpgram") or "vpgram").strip().lower()
+            value = str(self.get_setting("awg_free_source", AWG_SOURCE_VPGRAM) or AWG_SOURCE_VPGRAM).strip().lower()
         except Exception:
-            value = "vpgram"
-        return value if value in ("vpgram", "warp") else "vpgram"
+            value = AWG_SOURCE_VPGRAM
+        return value if value in AWG_SOURCES_ORDER else AWG_SOURCE_VPGRAM
 
     def _awg_free_source_index(self):
-        return 1 if self._awg_free_source() == "warp" else 0
+        src = self._awg_free_source()
+        try:
+            return AWG_SOURCES_ORDER.index(src)
+        except Exception:
+            return 0
 
     def _on_awg_free_source_changed(self, index):
         try:
-            source = "warp" if int(index) == 1 else "vpgram"
+            idx = int(index)
+            source = AWG_SOURCES_ORDER[idx] if 0 <= idx < len(AWG_SOURCES_ORDER) else AWG_SOURCE_VPGRAM
         except Exception:
-            source = "vpgram"
+            source = AWG_SOURCE_VPGRAM
         try:
             self._set_setting_value("awg_free_source", source, reload_settings=False)
         except Exception:
@@ -7242,10 +7247,13 @@ Java.perform(function () {
                 if self._awg_running or bool(getattr(self._awg_core, "started", False)):
                     self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
                 use_source = source if source is not None else self._awg_free_source()
-                if use_source == "warp":
-                    run_on_ui_thread(lambda: BulletinHelper.show_info("Регистрирую Cloudflare WARP..."))
+                is_warp = str(use_source).startswith("warp")
+                source_title = AWG_SOURCES_MAP.get(use_source, {}).get("title", use_source)
+                if is_warp:
+                    msg = Z("Регистрирую %s…") % source_title
                 else:
-                    run_on_ui_thread(lambda: BulletinHelper.show_info("Скачиваю новый конфиг AWG..."))
+                    msg = Z("Скачиваю новый конфиг AWG...")
+                run_on_ui_thread(lambda msg=msg: BulletinHelper.show_info(msg))
                 if not self._awg_download_and_wait(source=use_source):
                     self._awg_reconnect_async()
             except Exception:
@@ -7256,10 +7264,10 @@ Java.perform(function () {
         threading.Thread(target=_work, daemon=True).start()
 
     def _download_free_awg_config(self, refreshed=False, on_done=None, source=None):
-        source = str(source or self._awg_free_source() or "vpgram").strip().lower()
-        if source not in ("vpgram", "warp"):
-            source = "vpgram"
-        is_warp = source == "warp"
+        source = str(source or self._awg_free_source() or AWG_SOURCE_VPGRAM).strip().lower()
+        if source not in AWG_SOURCES_ORDER:
+            source = AWG_SOURCE_VPGRAM
+        is_warp = source.startswith("warp")
 
         def _done(ok):
             if on_done is not None:
@@ -7272,15 +7280,20 @@ Java.perform(function () {
             _done(False)
             return
         self._awg_config_downloading = True
+        source_info = AWG_SOURCES_MAP.get(source, {})
+        source_title = source_info.get("title", source)
         if not refreshed:
-            BulletinHelper.show_info("Регистрирую Cloudflare WARP..." if is_warp else "Получаю AWG конфиг...")
+            msg = Z("Регистрирую %s…") if is_warp else Z("Получаю конфиг: %s…")
+            BulletinHelper.show_info(msg % source_title)
 
         def _worker():
             ok = False
             try:
                 if is_warp:
-                    filename = WARP_CONF_NAME
-                    text = generate_warp_conf()
+                    cfg_info = AWG_SOURCES_MAP.get(source, {})
+                    filename = cfg_info.get("filename", WARP_CONF_NAME)
+                    ep = cfg_info.get("endpoint", WARP_DEFAULT_ENDPOINT)
+                    text = generate_warp_conf(endpoint=ep)
                 else:
                     filename, text = self._fetch_vpgram_awg_config()
                 self._awg_conf_name = filename

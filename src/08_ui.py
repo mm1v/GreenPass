@@ -3068,37 +3068,67 @@ class SettingsUiMixin:
             ),
         ]
 
+    def _open_awg_source_picker_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            self._download_free_awg_config()
+            return
+        current_src = self._awg_free_source()
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Выбор источника AWG"))
+
+        items = []
+        for key in AWG_SOURCES_ORDER:
+            info = AWG_SOURCES_MAP.get(key, {})
+            title = Z(info.get("title", key))
+            desc = Z(info.get("desc", ""))
+            mark = "● " if key == current_src else "○ "
+            items.append(f"{mark}{title}\n{desc}")
+
+        def _on_choose(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                idx = int(which)
+                if 0 <= idx < len(AWG_SOURCES_ORDER):
+                    chosen_source = AWG_SOURCES_ORDER[idx]
+                    self._set_setting_value("awg_free_source", chosen_source, reload_settings=False)
+                    self._download_free_awg_config(source=chosen_source)
+            except Exception as e:
+                BulletinHelper.show_error(Z("Ошибка выбора: %s") % str(e))
+
+        builder.set_items(items, _on_choose)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+
     def _build_awg_mode_items(self):
         runtime_state = self._settings_mode_runtime_state(AWG_KIND)
         running = runtime_state == "connected"
-        conf_name = str(self._awg_conf_name or "").strip() or "Не выбран"
+        conf_name = str(self._awg_conf_name or "").strip() or Z("Не выбран")
+        source_labels = [AWG_SOURCES_MAP[k]["title"] for k in AWG_SOURCES_ORDER]
         items = [
             Header(text="Конфигурация"),
             Text(
                 text="Получить AWG конфиг",
-                subtext="Загрузить бесплатную конфигурацию",
+                subtext="Выбрать источник и загрузить конфиг",
                 icon="msg_download",
-                on_click=lambda *a: self._download_free_awg_config(),
-            ),
-            Text(
-                text="Обновить бесплатный конфиг",
-                subtext="Скачать новый конфиг AWG",
-                icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
+                on_click=lambda *a: self._open_awg_source_picker_dialog(),
             ),
             Selector(
                 key="awg_free_source_idx",
-                text="Бесплатный конфиг",
+                text="Источник конфига",
                 default=self._sync_selector_index_setting("awg_free_source_idx", self._awg_free_source_index()),
-                items=["VPgram", "Cloudflare WARP"],
+                items=source_labels,
                 icon="msg_list",
                 on_change=self._on_awg_free_source_changed,
             ),
             Text(
-                text="Сгенерировать новый WARP",
-                subtext="Новая регистрация Cloudflare WARP",
+                text="Обновить бесплатный конфиг",
+                subtext="Скачать новый конфиг для выбранного источника",
                 icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(source="warp"),
+                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
             ),
             Text(
                 text="Выбрать .conf",

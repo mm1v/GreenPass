@@ -670,6 +670,255 @@ TRANSLATIONS_EN = {
     "Отмена": "Cancel",
     "Очистить": "Clear",
     "Подключить": "Connect",
+    "15 минут": "15 minutes",
+    "16 hex-символов": "16 hex characters",
+    "30 минут": "30 minutes",
+    "5 минут": "5 minutes",
+    "60 минут": "60 minutes",
+    "AWG сервер не отвечает": "AWG server not responding",
+    "AmneziaWG выключен": "AmneziaWG off",
+    "AmneziaWG подключается…": "AmneziaWG connecting…",
+    "AmneziaWG подключён": "AmneziaWG connected",
+    "AmneziaWG приостановлен": "AmneziaWG paused",
+    "AnyTLS узел": "AnyTLS node",
+    "Cloudflare WARP (Auto)": "Cloudflare WARP (Auto)",
+    "GreenPass обновлён до %s. Перезапустите приложение.": "GreenPass updated to %s. Restart the app.",
+    "HWID должен содержать ровно 16 hex-символов": "HWID must contain exactly 16 hex characters",
+    "Hysteria узел": "Hysteria node",
+    "IPv6 включён": "IPv6 enabled",
+    "IPv6 выключен": "IPv6 disabled",
+    "Mieru узел": "Mieru node",
+    "Naive узел": "Naive node",
+    "SSH узел": "SSH node",
+    "ShadowTLS узел": "ShadowTLS node",
+    "Sudoku узел": "Sudoku node",
+    "TG WS: приостановлен": "TG WS: paused",
+    "TUIC узел": "TUIC node",
+    "Telegram WebSocket прокси": "Telegram WebSocket proxy",
+    "VK-хешей: %d": "VK hashes: %d",
+    "VLESS: выключен": "VLESS: off",
+    "VLESS: подключен": "VLESS: connected",
+    "VLESS: приостановлен": "VLESS: paused",
+    "VPgram Free (AWG)": "VPgram Free (AWG)",
+    "WARP Clean (Port 500)": "WARP Clean (Port 500)",
+    "WARP Clean (Port 854)": "WARP Clean (Port 854)",
+    "WARP Clean (Port 880)": "WARP Clean (Port 880)",
+    "WARP отклонил регистрацию: %s": "WARP rejected registration: %s",
+    "WIFI %s — прокси приостановлен": "Wi-Fi %s — proxy paused",
+    "WebRTC прокси": "WebRTC proxy",
+    "anytls узел": "anytls node",
+    "hysteria узел": "hysteria node",
+    "hysteria2 узел": "hysteria2 node",
+    "mieru узел": "mieru node",
+    "naive узел": "naive node",
+    "olcRTC подписки обновлены": "olcRTC subscriptions updated",
+    "olcRTC: приостановлен": "olcRTC: paused",
+    "olcRTC: прокси не применён": "olcRTC: proxy not applied",
+    "qWDTT импортирован": "qWDTT imported",
+    "qWDTT подписка": "qWDTT subscription",
+    "shadowtls узел": "shadowtls node",
+    "sing-box конфиг импортирован": "sing-box config imported",
+    "ss узел": "ss node",
+    "ssh узел": "ssh node",
+    "sudoku узел": "sudoku node",
+    "trojan узел": "trojan node",
+    "tuic узел": "tuic node",
+    "vless узел": "vless node",
+    "vmess узел": "vmess node",
+    "Автопроверка пинга": "Auto ping check",
+    "Автор": "Author",
+    "Активная •": "Active •",
+    "Анонимный ключ VPgram с обфускацией AWG": "VPgram anonymous key with AWG obfuscation",
+    "Бесплатный конфиг": "Free config",
+    "В подписке нет olcRTC конфигов": "Subscription has no olcRTC configs",
+    "Виден": "Visible",
+    "Включена": "Enabled",
+    "Восстановить конфиги и настройки из файла": "Restore configs and settings from file",
+    "Все источники скрыты — подключены все узлы": "All sources are hidden — all nodes connected",
+    "Все протоколы": "All protocols",
+    "Все узлы и поиск…": "All nodes and search…",
+    "Встроенный прокси": "Built-in proxy",
+    "Выберите сервер ниже или добавьте из буфера": "Select a server below or add from clipboard",
+    "Выбор источника AWG": "Select AWG source",
+    "Выбрать источник и загрузить конфиг": "Choose source and download config",
+    "Выключен": "Off",
+    "Выключена": "Disabled",
+    "Выключено — Telegram работает только по IPv4": "Disabled — Telegram operates via IPv4 only",
+    "Диагностика и перенос": "Diagnostics and migration",
+    "Добавить узел или подписку из ссылки": "Add node or subscription from link",
+    "Европейская подсеть 188.114.97.1:880": "European subnet 188.114.97.1:880",
+    "Журнал текущего запуска Telegram, включая переключения режимов": "Log of current Telegram run, including mode switches",
+    "Звонки (Voice Relay)": "Calls (Voice Relay)",
+    "Измените запрос или фильтр": "Change query or filter",
+    "Изменить HWID": "Change HWID",
+    "Изменить HWID устройства": "Change device HWID",
+    "Импорт sing-box": "Import sing-box",
+    "Импортировано:": "Imported:",
+    "Имя, адрес или протокол": "Name, address or protocol",
+    "Исключённые Wi-Fi сети": "Excluded Wi-Fi networks",
+    "Источник AWG": "AWG source",
+    "Источник конфига": "Config source",
+    "Источники": "Sources",
+    "Источники не найдены": "No sources found",
+    "Источники узлов": "Node sources",
+    "Клиент: %s": "Client: %s",
+    "Ключ: %s": "Key: %s",
+    "Комната: %s": "Room: %s",
+    "Конфиг AWG обновлён": "AWG config updated",
+    "Конфиг не выбран": "No config selected",
+    "Логи отправлены в Избранное": "Logs sent to Saved Messages",
+    "Нажмите на сервер для подключения": "Tap on a server to connect",
+    "Направляет запросы других плагинов через GreenPass": "Routes requests from other plugins via GreenPass",
+    "Не выбрана": "Not selected",
+    "Не подключено": "Not connected",
+    "Не удалось запустить подключение": "Failed to start connection",
+    "Не удалось зарегистрировать WARP: %s": "Failed to register WARP: %s",
+    "Не удалось изменить HWID:": "Failed to change HWID:",
+    "Не удалось обновить olcRTC подписки": "Failed to refresh olcRTC subscriptions",
+    "Не удалось открыть qWDTT": "Failed to open qWDTT",
+    "Не удалось открыть установщик обновления": "Failed to open update installer",
+    "Не удалось получить AWG: %s": "Failed to get AWG: %s",
+    "Не удалось проверить сертификат сервера AWG": "Failed to verify AWG server certificate",
+    "Не удалось проверить сертификат сервера WARP": "Failed to verify WARP server certificate",
+    "Не указан": "Not specified",
+    "Неверная qWDTT ссылка": "Invalid qWDTT link",
+    "Ничего не найдено": "Nothing found",
+    "Новая регистрация Cloudflare WARP": "New Cloudflare WARP registration",
+    "Обновите ядро: проверка конфигурации недоступна": "Update core: config check unavailable",
+    "Обновить бесплатный конфиг": "Refresh free config",
+    "Обновление готово — перезапустите приложение. Настройки сохранены": "Update ready — restart the app. Settings saved",
+    "Обновлять библиотеку в фоне": "Update library in background",
+    "Обход блокировки голосовых звонков": "Bypass voice call blocking",
+    "Отключать прокси при активном VPN": "Disable proxy when VPN is active",
+    "Отправить логи в Избранное": "Send logs to Saved Messages",
+    "Официальный эндпоинт engage.cloudflareclient.com:2408": "Official endpoint engage.cloudflareclient.com:2408",
+    "Очистить локальный файл библиотеки": "Clear local library file",
+    "Ошибка AWG: %s": "AWG error: %s",
+    "Ошибка olcRTC: %s": "olcRTC error: %s",
+    "Ошибка qWDTT: %s": "qWDTT error: %s",
+    "Ошибка выбора режима:": "Mode selection error:",
+    "Ошибка выбора файла: %s": "File selection error: %s",
+    "Ошибка выбора: %s": "Selection error: %s",
+    "Ошибка диалога обновлений:": "Update dialog error:",
+    "Ошибка импорта: %s": "Import error: %s",
+    "Ошибка интерфейса: %s": "Interface error: %s",
+    "Ошибка конфига": "Config error",
+    "Ошибка конфига %s: %s": "Config error %s: %s",
+    "Ошибка конфига Mihomo: %s": "Mihomo config error: %s",
+    "Ошибка конфига sing-box: %s": "sing-box config error: %s",
+    "Ошибка конфига sing-box: {exc}": "sing-box config error: {exc}",
+    "Ошибка отправки: %s": "Send error: %s",
+    "Ошибка подключения: {exc}": "Connection error: {exc}",
+    "Ошибка прокси: %s": "Proxy error: %s",
+    "Ошибка прокси: {e}": "Proxy error: {e}",
+    "Ошибка чтения AWG: %s": "AWG read error: %s",
+    "Ошибка экспорта: %s": "Export error: %s",
+    "Ошибка ядра прокси: {err}": "Proxy core error: {err}",
+    "Параметры Voice Relay": "Voice Relay parameters",
+    "Перезапустите приложение для нового ядра": "Restart app for new core",
+    "Перезапустите приложение для смены ядра": "Restart app to switch core",
+    "Переключать при сбое": "Switch on failure",
+    "Переходить к следующему узлу": "Move to next node",
+    "Плагин не умеет собрать конфиг %s": "Plugin cannot build config %s",
+    "Подключение qWDTT": "Connecting qWDTT",
+    "Подключено": "Connected",
+    "Поиск серверов": "Search servers",
+    "Поиск:": "Search:",
+    "Показать все %d серверов": "Show all %d servers",
+    "Показывать узлы источника": "Show source nodes",
+    "Получаю конфиг: %s…": "Getting config: %s…",
+    "Предыдущая страница": "Previous page",
+    "Применить": "Apply",
+    "Приостановлен": "Paused",
+    "Приостановлено: WIFI": "Paused: Wi-Fi",
+    "Провайдер: %s": "Provider: %s",
+    "Проверка библиотеки выполняется в фоне": "Library check is running in background",
+    "Проверяю ядро…": "Checking core…",
+    "Прокси восстановлен": "Proxy restored",
+    "Прокси не подключён": "Proxy not connected",
+    "Прокси не работает. Попробуйте переключиться на ядро sing-box": "Proxy not working. Try switching to sing-box core",
+    "Протокол %s не поддерживается плагином": "Protocol %s is not supported by plugin",
+    "Протокол %s не поддерживается текущим ядром": "Protocol %s is not supported by current core",
+    "Профилей: %d": "Profiles: %d",
+    "Профиль не выбран": "No profile selected",
+    "Профиль: %s": "Profile: %s",
+    "Расширенные настройки": "Advanced settings",
+    "Регистрирую %s…": "Registering %s…",
+    "Регистрирую Cloudflare WARP...": "Registering Cloudflare WARP...",
+    "Регистрирую Cloudflare WARP…": "Registering Cloudflare WARP…",
+    "Режим подключения": "Connection mode",
+    "Режим: %s\\nЯдро GreenPass: %s\\nАвтообновление: %s": "Mode: %s\\nGreenPass core: %s\\nAuto-update: %s",
+    "Свой узел": "Custom node",
+    "Сгенерировать новый WARP": "Generate fresh WARP",
+    "Сервер доступен • %d ms": "Server available • %d ms",
+    "Сервер доступен • %s ms": "Server available • %s ms",
+    "Сервер, порт и ключ шифрования": "Server, port and encryption key",
+    "Сервер: %s": "Server: %s",
+    "Сервер: %s:%d\\nПинг: %s": "Server: %s:%d\\nPing: %s",
+    "Серверов на странице": "Servers per page",
+    "Серверы и конфиг": "Servers and config",
+    "Сети, ядро, IPv6, перенос": "Networks, core, IPv6, migration",
+    "Сеть и автоматизация": "Network and automation",
+    "Системный порт 500 (162.159.192.9:500)": "System port 500 (162.159.192.9:500)",
+    "Скачать новый конфиг AWG": "Download fresh AWG config",
+    "Скачать новый конфиг для выбранного источника": "Download fresh config for selected source",
+    "Скачивание и проверка библиотеки": "Downloading and checking library",
+    "Скачиваю новый конфиг AWG...": "Downloading fresh AWG config...",
+    "Скрыт": "Hidden",
+    "Скрытые источники не участвуют в автовыборе": "Hidden sources are excluded from auto-selection",
+    "Следующая страница": "Next page",
+    "Состояние неизвестно": "Status unknown",
+    "Сохранить": "Save",
+    "Сохранить конфиги и настройки в Избранное": "Save configs and settings to Saved Messages",
+    "Ссылка на текущий Relay сервер": "Link to current Relay server",
+    "Текущий:": "Current:",
+    "Тест задержки и доступности узлов": "Test latency and node availability",
+    "Транспорт: %s": "Transport: %s",
+    "Туннель Amnezia WireGuard": "Amnezia WireGuard tunnel",
+    "Туннель не подтверждён": "Tunnel not confirmed",
+    "Удалить %s?": "Delete %s?",
+    "Удалить узел?": "Delete node?",
+    "Фильтр протокола": "Protocol filter",
+    "Фильтр:": "Filter:",
+    "Частые настройки": "Frequent settings",
+    "Чистый IP 162.159.193.10:854 для обхода ТСПУ": "Clean IP 162.159.193.10:854 to bypass TSPU",
+    "Ядро GreenPass не загружено": "GreenPass core is not loaded",
+    "Ядро GreenPass обновлено": "GreenPass core updated",
+    "Ядро GreenPass обновлено. Перезапустите приложение": "GreenPass core updated. Restart the app",
+    "Ядро GreenPass установлено": "GreenPass core installed",
+    "Ядро GreenPass установлено. Перезапустите приложение": "GreenPass core installed. Restart the app",
+    "Ядро VLESS": "VLESS core",
+    "Ядро загружается…": "Core is loading…",
+    "Ядро и прокси": "Core and proxy",
+    "Ядро обновлено — перезапустите приложение": "Core updated — restart the app",
+    "Ядро уже загружается": "Core is already loading",
+    "Ядро установлено — перезапустите приложение": "Core installed — restart the app",
+    "в ответе WARP некорректный endpoint": "WARP response has invalid endpoint",
+    "в ответе WARP нет корректного IPv4-адреса": "WARP response has no valid IPv4 address",
+    "в ответе WARP нет корректного IPv6-адреса": "WARP response has no valid IPv6 address",
+    "в ответе WARP нет корректного public_key пира": "WARP response has no valid peer public_key",
+    "загружается…": "loading…",
+    "мс": "ms",
+    "не поддерж": "not supported",
+    "неверный формат qWDTT": "invalid qWDTT format",
+    "неизвестен": "unknown",
+    "ответ WARP не похож на JSON": "WARP response is not JSON",
+    "ответ WARP не похож на JSON-объект": "WARP response is not a JSON object",
+    "отказ API": "API rejection",
+    "подключается…": "connecting…",
+    "подключён": "connected",
+    "приложение": "application",
+    "проверяется…": "checking…",
+    "сервер": "server",
+    "сеть": "network",
+    "слишком большой ответ WARP": "WARP response too large",
+    "таймаут запроса к Cloudflare": "Cloudflare request timed out",
+    "узел": "node",
+    "узел не выбран": "node not selected",
+    "• %d узл.": "• %d nodes",
+    "● Не подключено:": "● Not connected:",
+    "● Подключение:": "● Connecting:",
+    "● Прокси приостановлен": "● Proxy paused",
 }
 
 TRANSLATION_PARTS_EN = (
@@ -730,6 +979,40 @@ TRANSLATION_PARTS_EN = (
     (" не запустился", " failed to start"),
     (": ошибка", ": error"),
     ("Ядро: ", "Core: "),
+    (" подключён", " connected"),
+    (" подключается…", " connecting…"),
+    (" приостановлен", " paused"),
+    (" выключен", " off"),
+    (" не запустился", " failed to start"),
+    (" источника", " sources"),
+    (" источников", " sources"),
+    (" совпадений", " matches"),
+    (" сет.", " net."),
+    (" узлов", " nodes"),
+    (" узл.", " nodes"),
+    (" узел", " node"),
+    (" профилей: ", " profiles: "),
+    (" импортировано ", " imported "),
+    ("Импортировать Mihomo конфиг из ", "Import Mihomo config from "),
+    ("Импортировать sing-box конфиг из ", "Import sing-box config from "),
+    ("Импортировать настройки из ", "Import settings from "),
+    ("Текущие настройки будут заменены.", "Current settings will be replaced."),
+    ("Импортировать ", "Import "),
+    ("Импорт qWDTT", "Import qWDTT"),
+    ("Импорт ", "Import "),
+    ("Импортировано: ", "Imported: "),
+    ("Импортировано ", "Imported "),
+    ("Сервер доступен • ", "Server available • "),
+    ("Серверы ", "Servers "),
+    (" из ", " of "),
+    ("Подключение…", "Connecting…"),
+    ("подключается…", "connecting…"),
+    ("Активная • ", "Active • "),
+    ("Источник: ", "Source: "),
+    ("Источник", "Source"),
+    ("Узлы (", "Nodes ("),
+    ("Показать все ", "Show all "),
+    (" серверов", " servers"),
 )
 
 TRANSLATION_FRAGMENTS_EN = tuple(sorted(
@@ -1483,6 +1766,58 @@ OLCRTC_CARRIER_ITEMS = ("telemost", "jitsi", "wbstream")
 OLCRTC_TRANSPORT_ITEMS = ("datachannel", "vp8channel", "videochannel", "seichannel")
 OLCRTC_CARRIER_LABELS = ("Яндекс Телемост", "Jitsi Meet", "WB Stream")
 OLCRTC_TRANSPORT_LABELS = ("Data-канал", "VP8-канал", "Видео-канал", "SEI-канал")
+
+AWG_SOURCE_VPGRAM = "vpgram"
+AWG_SOURCE_WARP_AUTO = "warp"
+AWG_SOURCE_WARP_854 = "warp_854"
+AWG_SOURCE_WARP_500 = "warp_500"
+AWG_SOURCE_WARP_880 = "warp_880"
+
+AWG_SOURCES_ORDER = [
+    AWG_SOURCE_VPGRAM,
+    AWG_SOURCE_WARP_AUTO,
+    AWG_SOURCE_WARP_854,
+    AWG_SOURCE_WARP_500,
+    AWG_SOURCE_WARP_880,
+]
+
+AWG_SOURCES_MAP = {
+    AWG_SOURCE_VPGRAM: {
+        "title": "VPgram Free (AWG)",
+        "desc": "Анонимный ключ VPgram с обфускацией AWG",
+        "desc_en": "VPgram anonymous key with AWG obfuscation",
+        "filename": "VPgram_Free.conf",
+    },
+    AWG_SOURCE_WARP_AUTO: {
+        "title": "Cloudflare WARP (Auto)",
+        "desc": "Официальный эндпоинт engage.cloudflareclient.com:2408",
+        "desc_en": "Official endpoint engage.cloudflareclient.com:2408",
+        "endpoint": "engage.cloudflareclient.com:2408",
+        "filename": "Cloudflare_WARP.conf",
+    },
+    AWG_SOURCE_WARP_854: {
+        "title": "WARP Clean (Port 854)",
+        "desc": "Чистый IP 162.159.193.10:854 для обхода ТСПУ",
+        "desc_en": "Clean IP 162.159.193.10:854 to bypass TSPU",
+        "endpoint": "162.159.193.10:854",
+        "filename": "WARP_Clean_854.conf",
+    },
+    AWG_SOURCE_WARP_500: {
+        "title": "WARP Clean (Port 500)",
+        "desc": "Системный порт 500 (162.159.192.9:500)",
+        "desc_en": "System port 500 (162.159.192.9:500)",
+        "endpoint": "162.159.192.9:500",
+        "filename": "WARP_Clean_500.conf",
+    },
+    AWG_SOURCE_WARP_880: {
+        "title": "WARP Clean (Port 880)",
+        "desc": "Европейская подсеть 188.114.97.1:880",
+        "desc_en": "European subnet 188.114.97.1:880",
+        "endpoint": "188.114.97.1:880",
+        "filename": "WARP_Clean_880.conf",
+    },
+}
+
 AWG_FILE_PICKER_REQ = 13371
 GREENPASS_IMPORT_FILE_PICKER_REQ = 13372
 GREENPASS_EXPORT_FILE_NAME = "export.greenpass"
@@ -10326,10 +10661,11 @@ def build_warp_conf(private_key, peer_public_key, endpoint, v4, v6, obfuscation=
     return "\n".join(lines)
 
 
-def generate_warp_conf(timeout=WARP_TIMEOUT):
+def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT):
     """Register and return the finished .conf text."""
     reg = register_warp(timeout)
-    return build_warp_conf(reg["private_key"], reg["public_key"], reg["endpoint"], reg["v4"], reg["v6"])
+    target_endpoint = str(endpoint or "").strip() or reg.get("endpoint") or WARP_DEFAULT_ENDPOINT
+    return build_warp_conf(reg["private_key"], reg["public_key"], target_endpoint, reg["v4"], reg["v6"])
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]
@@ -13403,37 +13739,67 @@ class SettingsUiMixin:
             ),
         ]
 
+    def _open_awg_source_picker_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            self._download_free_awg_config()
+            return
+        current_src = self._awg_free_source()
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Выбор источника AWG"))
+
+        items = []
+        for key in AWG_SOURCES_ORDER:
+            info = AWG_SOURCES_MAP.get(key, {})
+            title = Z(info.get("title", key))
+            desc = Z(info.get("desc", ""))
+            mark = "● " if key == current_src else "○ "
+            items.append(f"{mark}{title}\n{desc}")
+
+        def _on_choose(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                idx = int(which)
+                if 0 <= idx < len(AWG_SOURCES_ORDER):
+                    chosen_source = AWG_SOURCES_ORDER[idx]
+                    self._set_setting_value("awg_free_source", chosen_source, reload_settings=False)
+                    self._download_free_awg_config(source=chosen_source)
+            except Exception as e:
+                BulletinHelper.show_error(Z("Ошибка выбора: %s") % str(e))
+
+        builder.set_items(items, _on_choose)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+
     def _build_awg_mode_items(self):
         runtime_state = self._settings_mode_runtime_state(AWG_KIND)
         running = runtime_state == "connected"
-        conf_name = str(self._awg_conf_name or "").strip() or "Не выбран"
+        conf_name = str(self._awg_conf_name or "").strip() or Z("Не выбран")
+        source_labels = [AWG_SOURCES_MAP[k]["title"] for k in AWG_SOURCES_ORDER]
         items = [
             Header(text="Конфигурация"),
             Text(
                 text="Получить AWG конфиг",
-                subtext="Загрузить бесплатную конфигурацию",
+                subtext="Выбрать источник и загрузить конфиг",
                 icon="msg_download",
-                on_click=lambda *a: self._download_free_awg_config(),
-            ),
-            Text(
-                text="Обновить бесплатный конфиг",
-                subtext="Скачать новый конфиг AWG",
-                icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
+                on_click=lambda *a: self._open_awg_source_picker_dialog(),
             ),
             Selector(
                 key="awg_free_source_idx",
-                text="Бесплатный конфиг",
+                text="Источник конфига",
                 default=self._sync_selector_index_setting("awg_free_source_idx", self._awg_free_source_index()),
-                items=["VPgram", "Cloudflare WARP"],
+                items=source_labels,
                 icon="msg_list",
                 on_change=self._on_awg_free_source_changed,
             ),
             Text(
-                text="Сгенерировать новый WARP",
-                subtext="Новая регистрация Cloudflare WARP",
+                text="Обновить бесплатный конфиг",
+                subtext="Скачать новый конфиг для выбранного источника",
                 icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(source="warp"),
+                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
             ),
             Text(
                 text="Выбрать .conf",
@@ -21662,19 +22028,24 @@ Java.perform(function () {
 
     def _awg_free_source(self):
         try:
-            value = str(self.get_setting("awg_free_source", "vpgram") or "vpgram").strip().lower()
+            value = str(self.get_setting("awg_free_source", AWG_SOURCE_VPGRAM) or AWG_SOURCE_VPGRAM).strip().lower()
         except Exception:
-            value = "vpgram"
-        return value if value in ("vpgram", "warp") else "vpgram"
+            value = AWG_SOURCE_VPGRAM
+        return value if value in AWG_SOURCES_ORDER else AWG_SOURCE_VPGRAM
 
     def _awg_free_source_index(self):
-        return 1 if self._awg_free_source() == "warp" else 0
+        src = self._awg_free_source()
+        try:
+            return AWG_SOURCES_ORDER.index(src)
+        except Exception:
+            return 0
 
     def _on_awg_free_source_changed(self, index):
         try:
-            source = "warp" if int(index) == 1 else "vpgram"
+            idx = int(index)
+            source = AWG_SOURCES_ORDER[idx] if 0 <= idx < len(AWG_SOURCES_ORDER) else AWG_SOURCE_VPGRAM
         except Exception:
-            source = "vpgram"
+            source = AWG_SOURCE_VPGRAM
         try:
             self._set_setting_value("awg_free_source", source, reload_settings=False)
         except Exception:
@@ -21734,10 +22105,13 @@ Java.perform(function () {
                 if self._awg_running or bool(getattr(self._awg_core, "started", False)):
                     self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
                 use_source = source if source is not None else self._awg_free_source()
-                if use_source == "warp":
-                    run_on_ui_thread(lambda: BulletinHelper.show_info("Регистрирую Cloudflare WARP..."))
+                is_warp = str(use_source).startswith("warp")
+                source_title = AWG_SOURCES_MAP.get(use_source, {}).get("title", use_source)
+                if is_warp:
+                    msg = Z("Регистрирую %s…") % source_title
                 else:
-                    run_on_ui_thread(lambda: BulletinHelper.show_info("Скачиваю новый конфиг AWG..."))
+                    msg = Z("Скачиваю новый конфиг AWG...")
+                run_on_ui_thread(lambda msg=msg: BulletinHelper.show_info(msg))
                 if not self._awg_download_and_wait(source=use_source):
                     self._awg_reconnect_async()
             except Exception:
@@ -21748,10 +22122,10 @@ Java.perform(function () {
         threading.Thread(target=_work, daemon=True).start()
 
     def _download_free_awg_config(self, refreshed=False, on_done=None, source=None):
-        source = str(source or self._awg_free_source() or "vpgram").strip().lower()
-        if source not in ("vpgram", "warp"):
-            source = "vpgram"
-        is_warp = source == "warp"
+        source = str(source or self._awg_free_source() or AWG_SOURCE_VPGRAM).strip().lower()
+        if source not in AWG_SOURCES_ORDER:
+            source = AWG_SOURCE_VPGRAM
+        is_warp = source.startswith("warp")
 
         def _done(ok):
             if on_done is not None:
@@ -21764,15 +22138,20 @@ Java.perform(function () {
             _done(False)
             return
         self._awg_config_downloading = True
+        source_info = AWG_SOURCES_MAP.get(source, {})
+        source_title = source_info.get("title", source)
         if not refreshed:
-            BulletinHelper.show_info("Регистрирую Cloudflare WARP..." if is_warp else "Получаю AWG конфиг...")
+            msg = Z("Регистрирую %s…") if is_warp else Z("Получаю конфиг: %s…")
+            BulletinHelper.show_info(msg % source_title)
 
         def _worker():
             ok = False
             try:
                 if is_warp:
-                    filename = WARP_CONF_NAME
-                    text = generate_warp_conf()
+                    cfg_info = AWG_SOURCES_MAP.get(source, {})
+                    filename = cfg_info.get("filename", WARP_CONF_NAME)
+                    ep = cfg_info.get("endpoint", WARP_DEFAULT_ENDPOINT)
+                    text = generate_warp_conf(endpoint=ep)
                 else:
                     filename, text = self._fetch_vpgram_awg_config()
                 self._awg_conf_name = filename

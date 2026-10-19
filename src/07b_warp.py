@@ -226,10 +226,11 @@ def build_warp_conf(private_key, peer_public_key, endpoint, v4, v6, obfuscation=
     return "\n".join(lines)
 
 
-def generate_warp_conf(timeout=WARP_TIMEOUT):
+def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT):
     """Register and return the finished .conf text."""
     reg = register_warp(timeout)
-    return build_warp_conf(reg["private_key"], reg["public_key"], reg["endpoint"], reg["v4"], reg["v6"])
+    target_endpoint = str(endpoint or "").strip() or reg.get("endpoint") or WARP_DEFAULT_ENDPOINT
+    return build_warp_conf(reg["private_key"], reg["public_key"], target_endpoint, reg["v4"], reg["v6"])
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]
