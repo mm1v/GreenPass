@@ -1,6 +1,61 @@
 # --- bundled from greenpass.hooks.py ---
 
-def _force_show_dialogs_proxy_button(da):
+def _attach_pill_stack_listener(da, plugin):
+    if da is None or plugin is None:
+        return
+    try:
+        activity = da.getParentActivity()
+        if activity is None:
+            return
+
+        def _setup_view(view):
+            if view is None:
+                return
+            try:
+                if getattr(view, "_gp_quick_switch_attached", False):
+                    return
+                view._gp_quick_switch_attached = True
+                plugin._bind_view_long_click(view, lambda v, a=activity: plugin._open_quick_mode_switch_dialog(a))
+            except Exception:
+                pass
+
+        # 1. Search in known fields on DialogsActivity
+        cls = da.getClass()
+        for field_name in ("pillStack", "pillsStack", "floatingPill", "proxyPill", "pillView", "pillsContainer"):
+            try:
+                f = cls.getDeclaredField(field_name)
+                f.setAccessible(True)
+                val = f.get(da)
+                if val is not None:
+                    _setup_view(val)
+            except:
+                pass
+
+        # 2. Walk the fragmentView tree to find any Pill-like views in exteraGram
+        root = getattr(da, "fragmentView", None)
+        if root is not None:
+            queue = [root]
+            visited = 0
+            while queue and visited < 150:
+                cur = queue.pop(0)
+                visited += 1
+                try:
+                    cname = str(cur.getClass().getName() or "").lower()
+                    if "pill" in cname or "proxypill" in cname:
+                        _setup_view(cur)
+                    from android.view import ViewGroup
+                    if isinstance(cur, ViewGroup):
+                        for i in range(min(cur.getChildCount(), 20)):
+                            child = cur.getChildAt(i)
+                            if child is not None:
+                                queue.append(child)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _force_show_dialogs_proxy_button(da, plugin=None):
     try:
         if da is None:
             return
@@ -26,6 +81,19 @@ def _force_show_dialogs_proxy_button(da):
                 proxy_item.setVisibility(View.VISIBLE)
             except:
                 pass
+
+            if plugin is not None:
+                try:
+                    if not getattr(proxy_item, "_gp_quick_switch_attached", False):
+                        proxy_item._gp_quick_switch_attached = True
+                        act = da.getParentActivity()
+                        plugin._bind_view_long_click(proxy_item, lambda v, a=act: plugin._open_quick_mode_switch_dialog(a))
+                except Exception:
+                    pass
+
+        # Attach long-click listener to exteraGram's Pill Stack if present
+        if plugin is not None:
+            _attach_pill_stack_listener(da, plugin)
 
         if cls is not None:
             try:
@@ -161,7 +229,7 @@ class _ForceDialogsProxyButtonHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 
@@ -176,7 +244,7 @@ class _DialogsShowSearchForceProxyHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 
@@ -191,7 +259,7 @@ class _DialogsShowDoneItemForceProxyHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 

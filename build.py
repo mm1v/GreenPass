@@ -12,7 +12,6 @@ FILES_TO_MERGE = [
     "src/05_native.py",
     "src/06_subscriptions.py",
     "src/07_hooks.py",
-    "src/07b_warp.py",
     "src/08_ui.py",
     "src/09_modes.py",
     "src/10_webproxy.py",

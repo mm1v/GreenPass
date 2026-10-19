@@ -161,6 +161,31 @@ class SettingsUiMixin:
         except:
             return False
 
+    def _bind_view_long_click(self, view, callback):
+        if view is None or dynamic_proxy is None:
+            return False
+        try:
+            class _LongClick(dynamic_proxy(View.OnLongClickListener)):
+                def onLongClick(self, clicked_view):
+                    try:
+                        res = callback(clicked_view)
+                        return True if res is None else bool(res)
+                    except Exception as exc:
+                        try:
+                            BulletinHelper.show_error("Ошибка интерфейса: %s" % str(exc))
+                        except:
+                            pass
+                        return False
+
+            listener = _LongClick()
+            view.setOnLongClickListener(listener)
+            refs = list(getattr(self, "_settings_view_long_click_refs", []) or [])
+            refs.append(listener)
+            self._settings_view_long_click_refs = refs[-32:]
+            return True
+        except:
+            return False
+
     def _build_settings_hero(self):
         try:
             fragment = get_last_fragment()
@@ -2622,13 +2647,116 @@ class SettingsUiMixin:
 
         return items
 
-    def _settings_mode_choices(self):
+    def _all_available_modes(self):
         return [
             (VLESS_KIND, self._settings_mode_title(VLESS_KIND)),
             (TGWS_KIND, "TG WS"),
             (AWG_KIND, "AmneziaWG"),
             (OLCRTC_KIND, "olcRTC"),
         ]
+
+    def _get_visible_modes(self):
+        val = self.get_setting("visible_modes", None)
+        if isinstance(val, list) and val:
+            valid = [m for m in val if m in (VLESS_KIND, TGWS_KIND, AWG_KIND, OLCRTC_KIND)]
+            if valid:
+                return valid
+        return [VLESS_KIND, TGWS_KIND, AWG_KIND, OLCRTC_KIND]
+
+    def _get_visible_modes_summary(self):
+        visible = self._get_visible_modes()
+        titles = [self._settings_mode_title(m) for m in visible]
+        return ", ".join(titles) if titles else "VLESS"
+
+    def _open_visible_modes_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            return
+        all_modes = self._all_available_modes()
+        current_visible = set(self._get_visible_modes())
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Отображаемые режимы"))
+
+        items = [title for mode, title in all_modes]
+        checked = [mode in current_visible for mode, title in all_modes]
+        selected_mask = list(checked)
+
+        def _on_toggle(dlg, which, is_checked):
+            try:
+                selected_mask[int(which)] = bool(is_checked)
+            except:
+                pass
+
+        def _on_save(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            chosen = [all_modes[i][0] for i, on in enumerate(selected_mask) if on]
+            if not chosen:
+                BulletinHelper.show_error(Z("Должен быть выбран хотя бы один режим"))
+                return
+            self._set_setting_value("visible_modes", chosen, reload_settings=False)
+            try:
+                self.set_setting("visible_modes", chosen, reload_settings=False)
+            except:
+                pass
+            cur_mode = self._get_connection_mode()
+            if cur_mode not in chosen:
+                self._select_mode_from_settings(chosen[0])
+            else:
+                self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
+            BulletinHelper.show_success(Z("Режимы обновлены"))
+
+        builder.set_multi_choice_items(items, checked, _on_toggle)
+        builder.set_positive_button(Z("Сохранить"), _on_save)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+
+    def _open_quick_mode_switch_dialog(self, activity=None):
+        if activity is None:
+            activity = self._current_activity()
+        if activity is None:
+            return False
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Режим подключения"))
+
+        choices = self._settings_mode_choices()
+        current = self._get_connection_mode()
+
+        items = []
+        modes = []
+        for mode, title in choices:
+            modes.append(mode)
+            mark = "● " if mode == current else "○ "
+            items.append(f"{mark}{title}")
+
+        def _on_choose(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                idx = int(which)
+                if 0 <= idx < len(modes):
+                    target = modes[idx]
+                    if target != current:
+                        self._select_mode_from_settings(target)
+                        BulletinHelper.show_success(Z("Режим: %s") % self._settings_mode_title(target))
+            except Exception as exc:
+                BulletinHelper.show_error(Z("Ошибка: %s") % str(exc))
+
+        builder.set_items(items, _on_choose)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+        return True
+
+    def _settings_mode_choices(self):
+        visible = set(self._get_visible_modes())
+        all_choices = self._all_available_modes()
+        filtered = [c for c in all_choices if c[0] in visible]
+        return filtered if filtered else all_choices[:1]
 
     def _settings_mode_title(self, mode):
         target = str(mode or VLESS_KIND)
@@ -3174,68 +3302,12 @@ class SettingsUiMixin:
             ),
         ]
 
-    def _open_awg_source_picker_dialog(self):
-        activity = self._current_activity()
-        if activity is None:
-            self._download_free_awg_config()
-            return
-        current_src = self._awg_free_source()
-        builder = AlertDialogBuilder(activity)
-        builder.set_title(Z("Выбор источника AWG"))
-
-        items = []
-        for key in AWG_SOURCES_ORDER:
-            info = AWG_SOURCES_MAP.get(key, {})
-            title = Z(info.get("title", key))
-            desc = Z(info.get("desc", ""))
-            mark = "● " if key == current_src else "○ "
-            items.append(f"{mark}{title}\n{desc}")
-
-        def _on_choose(dlg, which):
-            try:
-                dlg.dismiss()
-            except:
-                pass
-            try:
-                idx = int(which)
-                if 0 <= idx < len(AWG_SOURCES_ORDER):
-                    chosen_source = AWG_SOURCES_ORDER[idx]
-                    self._set_setting_value("awg_free_source", chosen_source, reload_settings=False)
-                    self._download_free_awg_config(source=chosen_source)
-            except Exception as e:
-                BulletinHelper.show_error(Z("Ошибка выбора: %s") % str(e))
-
-        builder.set_items(items, _on_choose)
-        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
-        builder.show()
-
     def _build_awg_mode_items(self):
         runtime_state = self._settings_mode_runtime_state(AWG_KIND)
         running = runtime_state == "connected"
         conf_name = str(self._awg_conf_name or "").strip() or Z("Не выбран")
-        source_labels = [AWG_SOURCES_MAP[k]["title"] for k in AWG_SOURCES_ORDER]
         items = [
             Header(text="Конфигурация"),
-            Text(
-                text="Получить AWG конфиг",
-                subtext="Выбрать источник и загрузить конфиг",
-                icon="msg_download",
-                on_click=lambda *a: self._open_awg_source_picker_dialog(),
-            ),
-            Selector(
-                key="awg_free_source_idx",
-                text="Источник конфига",
-                default=self._sync_selector_index_setting("awg_free_source_idx", self._awg_free_source_index()),
-                items=source_labels,
-                icon="msg_list",
-                on_change=self._on_awg_free_source_changed,
-            ),
-            Text(
-                text="Обновить бесплатный конфиг",
-                subtext="Скачать новый конфиг для выбранного источника",
-                icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
-            ),
             Text(
                 text="Выбрать .conf",
                 subtext=conf_name,
@@ -3335,61 +3407,19 @@ class SettingsUiMixin:
             return self._build_olcrtc_mode_items()
         return self._build_vless_mode_items()
 
-    def _create_all_modes_subpage(self):
-        items = [
-            Header(text=Z("Все режимы")),
-            Text(
-                text="AmneziaWG / WARP",
-                subtext=Z("Конфиг, источники, WARP Clean, .conf"),
-                icon="msg_secret",
-                create_sub_fragment=lambda: self._safe_settings_items(Z("AmneziaWG"), self._build_awg_mode_items),
-            ),
-            Text(
-                text="VLESS / Shadowsocks",
-                subtext=Z("Узлы, подписки, Reality"),
-                icon="msg_channel",
-                create_sub_fragment=lambda: self._safe_settings_items("VLESS", self._build_vless_mode_items),
-            ),
-            Text(
-                text="Telegram WebSocket",
-                subtext=Z("TG WS прокси и порты"),
-                icon="msg_link2",
-                create_sub_fragment=lambda: self._safe_settings_items("TG WS", self._build_tgws_mode_items),
-            ),
-            Text(
-                text="olcRTC",
-                subtext=Z("WebRTC профили, звонки"),
-                icon="msg_calls",
-                create_sub_fragment=lambda: self._safe_settings_items("olcRTC", self._build_olcrtc_mode_items),
-            ),
-        ]
-        return items
-
     def _create_active_mode_subpage(self):
         mode = self._get_connection_mode()
         title = self._settings_main_mode_title(mode)
-        items = []
-        items.extend(self._safe_settings_items(title, self._build_active_mode_items))
-        items.extend([
-            Divider(),
-            Header(text=Z("Другие режимы")),
-            Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_settings",
-                create_sub_fragment=self._create_all_modes_subpage,
-            ),
-        ])
-        return items
+        return self._safe_settings_items(title, self._build_active_mode_items)
 
     def _create_greenpass_extra_subpage(self):
         items = [
             Header(text=Z("Режимы и протоколы")),
             Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_folders",
-                create_sub_fragment=self._create_all_modes_subpage,
+                text=Z("Отображаемые режимы"),
+                subtext=self._get_visible_modes_summary(),
+                icon="msg_list",
+                on_click=lambda *a: self._open_visible_modes_dialog(),
             ),
             Divider(),
             Header(text="Сеть и автоматизация"),
@@ -4619,25 +4649,6 @@ class SettingsUiMixin:
             c_lp.topMargin = dp(8)
             container.addView(card, c_lp)
 
-        # Servers & Subscriptions Section
-        container.addView(self._create_ui_header(activity, "Серверы и подписки"), LinearLayout.LayoutParams(-1, -2))
-
-        all_modes_card = self._create_ui_action_card(
-            activity, "msg_folders", "Все серверы и конфиги",
-            "Настройка узлов AmneziaWG, VLESS, TG WS, olcRTC",
-            lambda: self._open_subpage_fragment(self._create_all_modes_subpage)
-        )
-        container.addView(all_modes_card, LinearLayout.LayoutParams(-1, -2))
-
-        awg_card = self._create_ui_action_card(
-            activity, "msg_download_settings", "Бесплатные серверы AWG",
-            "Скачивание готовых конфигураций AmneziaWG",
-            lambda: self._open_awg_source_picker_dialog()
-        )
-        awg_lp = LinearLayout.LayoutParams(-1, -2)
-        awg_lp.topMargin = dp(8)
-        container.addView(awg_card, awg_lp)
-
     def _fill_settings_tab(self, activity, container, state):
         dp = AndroidUtilities.dp
 
@@ -4859,12 +4870,6 @@ class SettingsUiMixin:
                 subtext=config_subtext,
                 icon="msg_folders",
                 create_sub_fragment=self._create_active_mode_subpage,
-            ))
-            settings.append(Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_settings",
-                create_sub_fragment=self._create_all_modes_subpage,
             ))
 
             settings.append(Divider())

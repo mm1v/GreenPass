@@ -518,6 +518,11 @@ TRANSLATIONS_EN = {
     "Обновите ядро: проверка конфигурации недоступна": "Update core: config check unavailable",
     "Обновить бесплатный конфиг": "Refresh free config",
     "Обновление готово — перезапустите приложение. Настройки сохранены": "Update ready — restart the app. Settings saved",
+    "Отображаемые режимы": "Visible connection modes",
+    "Должен быть выбран хотя бы один режим": "At least one mode must be selected",
+    "Режимы обновлены": "Modes updated",
+    "Режим: %s": "Mode: %s",
+    "Сохранить": "Save",
     "Обновлять библиотеку в фоне": "Update library in background",
     "Обход блокировки голосовых звонков": "Bypass voice call blocking",
     "Отключать прокси при активном VPN": "Disable proxy when VPN is active",
@@ -1502,61 +1507,6 @@ OLCRTC_CARRIER_ITEMS = ("telemost", "jitsi", "wbstream")
 OLCRTC_TRANSPORT_ITEMS = ("datachannel", "vp8channel", "videochannel", "seichannel")
 OLCRTC_CARRIER_LABELS = ("Яндекс Телемост", "Jitsi Meet", "WB Stream")
 OLCRTC_TRANSPORT_LABELS = ("Data-канал", "VP8-канал", "Видео-канал", "SEI-канал")
-
-AWG_SOURCE_VPGRAM = "vpgram"
-AWG_SOURCE_WARP_AUTO = "warp"
-AWG_SOURCE_WARP_854 = "warp_854"
-AWG_SOURCE_WARP_500 = "warp_500"
-AWG_SOURCE_WARP_880 = "warp_880"
-
-# Default source for free AWG config — WARP Clean Port 500 works in Russia
-AWG_SOURCE_DEFAULT = AWG_SOURCE_WARP_500
-
-AWG_SOURCES_ORDER = [
-    AWG_SOURCE_WARP_500,
-    AWG_SOURCE_WARP_854,
-    AWG_SOURCE_WARP_880,
-    AWG_SOURCE_WARP_AUTO,
-    AWG_SOURCE_VPGRAM,
-]
-
-AWG_SOURCES_MAP = {
-    AWG_SOURCE_VPGRAM: {
-        "title": "VPgram Free (AWG)",
-        "desc": "⚠️ Заблокирован в РФ — эндпоинт 85.234.115.247:27947 недоступен",
-        "desc_en": "⚠️ Blocked in Russia — endpoint 85.234.115.247:27947 unreachable",
-        "filename": "VPgram_Free.conf",
-        "blocked_in_ru": True,
-    },
-    AWG_SOURCE_WARP_AUTO: {
-        "title": "Cloudflare WARP (Auto)",
-        "desc": "Официальный эндпоинт engage.cloudflareclient.com:2408",
-        "desc_en": "Official endpoint engage.cloudflareclient.com:2408",
-        "endpoint": "engage.cloudflareclient.com:2408",
-        "filename": "Cloudflare_WARP.conf",
-    },
-    AWG_SOURCE_WARP_854: {
-        "title": "WARP Clean (Port 854)",
-        "desc": "Чистый IP 162.159.193.10:854 для обхода ТСПУ",
-        "desc_en": "Clean IP 162.159.193.10:854 to bypass TSPU",
-        "endpoint": "162.159.193.10:854",
-        "filename": "WARP_Clean_854.conf",
-    },
-    AWG_SOURCE_WARP_500: {
-        "title": "WARP Clean (Port 500) ✓",
-        "desc": "Рекомендуется: системный порт 500 (162.159.192.9:500)",
-        "desc_en": "Recommended: system port 500 (162.159.192.9:500)",
-        "endpoint": "162.159.192.9:500",
-        "filename": "WARP_Clean_500.conf",
-    },
-    AWG_SOURCE_WARP_880: {
-        "title": "WARP Clean (Port 880)",
-        "desc": "Европейская подсеть 188.114.97.1:880",
-        "desc_en": "European subnet 188.114.97.1:880",
-        "endpoint": "188.114.97.1:880",
-        "filename": "WARP_Clean_880.conf",
-    },
-}
 
 AWG_FILE_PICKER_REQ = 13371
 GREENPASS_IMPORT_FILE_PICKER_REQ = 13372

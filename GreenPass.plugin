@@ -796,6 +796,11 @@ TRANSLATIONS_EN = {
     "Обновите ядро: проверка конфигурации недоступна": "Update core: config check unavailable",
     "Обновить бесплатный конфиг": "Refresh free config",
     "Обновление готово — перезапустите приложение. Настройки сохранены": "Update ready — restart the app. Settings saved",
+    "Отображаемые режимы": "Visible connection modes",
+    "Должен быть выбран хотя бы один режим": "At least one mode must be selected",
+    "Режимы обновлены": "Modes updated",
+    "Режим: %s": "Mode: %s",
+    "Сохранить": "Save",
     "Обновлять библиотеку в фоне": "Update library in background",
     "Обход блокировки голосовых звонков": "Bypass voice call blocking",
     "Отключать прокси при активном VPN": "Disable proxy when VPN is active",
@@ -1780,61 +1785,6 @@ OLCRTC_CARRIER_ITEMS = ("telemost", "jitsi", "wbstream")
 OLCRTC_TRANSPORT_ITEMS = ("datachannel", "vp8channel", "videochannel", "seichannel")
 OLCRTC_CARRIER_LABELS = ("Яндекс Телемост", "Jitsi Meet", "WB Stream")
 OLCRTC_TRANSPORT_LABELS = ("Data-канал", "VP8-канал", "Видео-канал", "SEI-канал")
-
-AWG_SOURCE_VPGRAM = "vpgram"
-AWG_SOURCE_WARP_AUTO = "warp"
-AWG_SOURCE_WARP_854 = "warp_854"
-AWG_SOURCE_WARP_500 = "warp_500"
-AWG_SOURCE_WARP_880 = "warp_880"
-
-# Default source for free AWG config — WARP Clean Port 500 works in Russia
-AWG_SOURCE_DEFAULT = AWG_SOURCE_WARP_500
-
-AWG_SOURCES_ORDER = [
-    AWG_SOURCE_WARP_500,
-    AWG_SOURCE_WARP_854,
-    AWG_SOURCE_WARP_880,
-    AWG_SOURCE_WARP_AUTO,
-    AWG_SOURCE_VPGRAM,
-]
-
-AWG_SOURCES_MAP = {
-    AWG_SOURCE_VPGRAM: {
-        "title": "VPgram Free (AWG)",
-        "desc": "⚠️ Заблокирован в РФ — эндпоинт 85.234.115.247:27947 недоступен",
-        "desc_en": "⚠️ Blocked in Russia — endpoint 85.234.115.247:27947 unreachable",
-        "filename": "VPgram_Free.conf",
-        "blocked_in_ru": True,
-    },
-    AWG_SOURCE_WARP_AUTO: {
-        "title": "Cloudflare WARP (Auto)",
-        "desc": "Официальный эндпоинт engage.cloudflareclient.com:2408",
-        "desc_en": "Official endpoint engage.cloudflareclient.com:2408",
-        "endpoint": "engage.cloudflareclient.com:2408",
-        "filename": "Cloudflare_WARP.conf",
-    },
-    AWG_SOURCE_WARP_854: {
-        "title": "WARP Clean (Port 854)",
-        "desc": "Чистый IP 162.159.193.10:854 для обхода ТСПУ",
-        "desc_en": "Clean IP 162.159.193.10:854 to bypass TSPU",
-        "endpoint": "162.159.193.10:854",
-        "filename": "WARP_Clean_854.conf",
-    },
-    AWG_SOURCE_WARP_500: {
-        "title": "WARP Clean (Port 500) ✓",
-        "desc": "Рекомендуется: системный порт 500 (162.159.192.9:500)",
-        "desc_en": "Recommended: system port 500 (162.159.192.9:500)",
-        "endpoint": "162.159.192.9:500",
-        "filename": "WARP_Clean_500.conf",
-    },
-    AWG_SOURCE_WARP_880: {
-        "title": "WARP Clean (Port 880)",
-        "desc": "Европейская подсеть 188.114.97.1:880",
-        "desc_en": "European subnet 188.114.97.1:880",
-        "endpoint": "188.114.97.1:880",
-        "filename": "WARP_Clean_880.conf",
-    },
-}
 
 AWG_FILE_PICKER_REQ = 13371
 GREENPASS_IMPORT_FILE_PICKER_REQ = 13372
@@ -9923,7 +9873,62 @@ def _fetch_vless_nodes(url, text=None):
 __all__ = [name for name in globals() if not name.startswith("__")]
 # --- bundled from greenpass.hooks.py ---
 
-def _force_show_dialogs_proxy_button(da):
+def _attach_pill_stack_listener(da, plugin):
+    if da is None or plugin is None:
+        return
+    try:
+        activity = da.getParentActivity()
+        if activity is None:
+            return
+
+        def _setup_view(view):
+            if view is None:
+                return
+            try:
+                if getattr(view, "_gp_quick_switch_attached", False):
+                    return
+                view._gp_quick_switch_attached = True
+                plugin._bind_view_long_click(view, lambda v, a=activity: plugin._open_quick_mode_switch_dialog(a))
+            except Exception:
+                pass
+
+        # 1. Search in known fields on DialogsActivity
+        cls = da.getClass()
+        for field_name in ("pillStack", "pillsStack", "floatingPill", "proxyPill", "pillView", "pillsContainer"):
+            try:
+                f = cls.getDeclaredField(field_name)
+                f.setAccessible(True)
+                val = f.get(da)
+                if val is not None:
+                    _setup_view(val)
+            except:
+                pass
+
+        # 2. Walk the fragmentView tree to find any Pill-like views in exteraGram
+        root = getattr(da, "fragmentView", None)
+        if root is not None:
+            queue = [root]
+            visited = 0
+            while queue and visited < 150:
+                cur = queue.pop(0)
+                visited += 1
+                try:
+                    cname = str(cur.getClass().getName() or "").lower()
+                    if "pill" in cname or "proxypill" in cname:
+                        _setup_view(cur)
+                    from android.view import ViewGroup
+                    if isinstance(cur, ViewGroup):
+                        for i in range(min(cur.getChildCount(), 20)):
+                            child = cur.getChildAt(i)
+                            if child is not None:
+                                queue.append(child)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _force_show_dialogs_proxy_button(da, plugin=None):
     try:
         if da is None:
             return
@@ -9949,6 +9954,19 @@ def _force_show_dialogs_proxy_button(da):
                 proxy_item.setVisibility(View.VISIBLE)
             except:
                 pass
+
+            if plugin is not None:
+                try:
+                    if not getattr(proxy_item, "_gp_quick_switch_attached", False):
+                        proxy_item._gp_quick_switch_attached = True
+                        act = da.getParentActivity()
+                        plugin._bind_view_long_click(proxy_item, lambda v, a=act: plugin._open_quick_mode_switch_dialog(a))
+                except Exception:
+                    pass
+
+        # Attach long-click listener to exteraGram's Pill Stack if present
+        if plugin is not None:
+            _attach_pill_stack_listener(da, plugin)
 
         if cls is not None:
             try:
@@ -10084,7 +10102,7 @@ class _ForceDialogsProxyButtonHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 
@@ -10099,7 +10117,7 @@ class _DialogsShowSearchForceProxyHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 
@@ -10114,7 +10132,7 @@ class _DialogsShowDoneItemForceProxyHook(MethodHook):
                 return
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
-            _force_show_dialogs_proxy_button(param.thisObject)
+            _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
         except:
             pass
 
@@ -10454,259 +10472,6 @@ class _Ipv6PolicyHook(MethodHook):
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]
-# --- bundled from greenpass.warp.py ---
-"""Cloudflare WARP config generator (pure stdlib).
-
-Registers a fresh anonymous WARP device and renders a WireGuard/AmneziaWG .conf for it.
-Only the private key, the peer data and the interface addresses end up in the config;
-the registration id and token are deliberately dropped and never stored.
-"""
-import base64
-import binascii
-import datetime as _warp_dt
-import ipaddress
-import json
-import os
-import re
-import ssl
-import urllib.request
-
-WARP_API_URL = "https://api.cloudflareclient.com/v0a737/reg"
-WARP_USER_AGENT = "okhttp/3.12.1"
-WARP_TIMEOUT = 15
-WARP_MAX_RESPONSE = 256 * 1024
-WARP_DEFAULT_ENDPOINT = "engage.cloudflareclient.com:2408"
-WARP_CONF_NAME = "Cloudflare_WARP.conf"
-WARP_DNS = "1.1.1.1, 1.0.0.1, 2606:4700:4700::1111, 2606:4700:4700::1001"
-WARP_MTU = 1280
-# Junk packets only: a plain WireGuard server ignores them. S1/S2/H1-H4 must stay at the
-# WireGuard defaults or the WARP server drops the handshake.
-WARP_OBFUSCATION = (("Jc", 4), ("Jmin", 40), ("Jmax", 70))
-
-_WARP_P = 2 ** 255 - 19
-_WARP_A24 = 121665
-_WARP_BASEPOINT = (9).to_bytes(32, "little")
-_WARP_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
-
-
-class WarpError(Exception):
-    pass
-
-
-def _warp_x25519(k, u):
-    """RFC 7748 X25519 via the Montgomery ladder; k and u are 32-byte strings."""
-    if len(k) != 32 or len(u) != 32:
-        raise ValueError("X25519 inputs must be 32 bytes")
-    p = _WARP_P
-    kb = bytearray(k)
-    kb[0] &= 248
-    kb[31] &= 127
-    kb[31] |= 64
-    scalar = int.from_bytes(bytes(kb), "little")
-    ub = bytearray(u)
-    ub[31] &= 127
-    x1 = int.from_bytes(bytes(ub), "little") % p
-    x2, z2, x3, z3 = 1, 0, x1, 1
-    swap = 0
-    for t in range(254, -1, -1):
-        bit = (scalar >> t) & 1
-        swap ^= bit
-        if swap:
-            x2, x3 = x3, x2
-            z2, z3 = z3, z2
-        swap = bit
-        a = (x2 + z2) % p
-        aa = a * a % p
-        b = (x2 - z2) % p
-        bb = b * b % p
-        e = (aa - bb) % p
-        c = (x3 + z3) % p
-        d = (x3 - z3) % p
-        da = d * a % p
-        cb = c * b % p
-        x3 = (da + cb) ** 2 % p
-        z3 = x1 * (da - cb) ** 2 % p
-        x2 = aa * bb % p
-        z2 = e * (aa + _WARP_A24 * e) % p
-    if swap:
-        x2, x3 = x3, x2
-        z2, z3 = z3, z2
-    return (x2 * pow(z2, p - 2, p) % p).to_bytes(32, "little")
-
-
-def warp_generate_keypair():
-    """Return (private_b64, public_b64): a clamped X25519 key from os.urandom, base64-encoded."""
-    priv = bytearray(os.urandom(32))
-    priv[0] &= 248
-    priv[31] &= 127
-    priv[31] |= 64
-    priv = bytes(priv)
-    pub = _warp_x25519(priv, _WARP_BASEPOINT)
-    return base64.b64encode(priv).decode("ascii"), base64.b64encode(pub).decode("ascii")
-
-
-def _warp_valid_key(value):
-    try:
-        return len(base64.b64decode(str(value), validate=True)) == 32
-    except (binascii.Error, ValueError, TypeError):
-        return False
-
-
-def _warp_valid_endpoint(value):
-    text = str(value or "").strip()
-    if text.startswith("["):
-        if "]:" not in text:
-            return False
-        host, port = text[1:].rsplit("]:", 1)
-        try:
-            ipaddress.IPv6Address(host)
-        except ValueError:
-            return False
-    else:
-        if text.count(":") != 1:
-            return False
-        host, port = text.split(":", 1)
-        if not _WARP_HOST_RE.match(host):
-            return False
-    return port.isdigit() and 1 <= int(port) <= 65535
-
-
-def _warp_valid_ip(value, version):
-    try:
-        return ipaddress.ip_address(str(value).strip()).version == version
-    except ValueError:
-        return False
-
-
-def _warp_dig(obj, *path):
-    for key in path:
-        if isinstance(key, int):
-            if not isinstance(obj, list) or key >= len(obj):
-                return None
-            obj = obj[key]
-        else:
-            if not isinstance(obj, dict):
-                return None
-            obj = obj.get(key)
-    return obj
-
-
-def _warp_parse_response(raw):
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        raise WarpError("ответ WARP не похож на JSON")
-    if not isinstance(data, dict):
-        raise WarpError("ответ WARP не похож на JSON-объект")
-    if data.get("success") is False:
-        msg = _warp_dig(data, "errors", 0, "message") or _warp_dig(data, "error", "message") or "отказ API"
-        raise WarpError("WARP отклонил регистрацию: %s" % str(msg)[:120])
-    peer_key = _warp_dig(data, "config", "peers", 0, "public_key")
-    if not isinstance(peer_key, str) or not _warp_valid_key(peer_key):
-        raise WarpError("в ответе WARP нет корректного public_key пира")
-    endpoint = _warp_dig(data, "config", "peers", 0, "endpoint", "host")
-    if endpoint is None or endpoint == "":
-        endpoint = WARP_DEFAULT_ENDPOINT
-    if not isinstance(endpoint, str) or not _warp_valid_endpoint(endpoint):
-        raise WarpError("в ответе WARP некорректный endpoint")
-    v4 = _warp_dig(data, "config", "interface", "addresses", "v4")
-    v6 = _warp_dig(data, "config", "interface", "addresses", "v6")
-    if not isinstance(v4, str) or not _warp_valid_ip(v4, 4):
-        raise WarpError("в ответе WARP нет корректного IPv4-адреса")
-    if not isinstance(v6, str) or not _warp_valid_ip(v6, 6):
-        raise WarpError("в ответе WARP нет корректного IPv6-адреса")
-    return {"public_key": peer_key.strip(), "endpoint": endpoint.strip(), "v4": v4.strip(), "v6": v6.strip()}
-
-
-def register_warp(timeout=WARP_TIMEOUT, proxy_url=None):
-    """Register a new anonymous WARP device. Returns a dict with the private key and the
-    peer/interface data needed by build_warp_conf. Raises WarpError on any failure."""
-    priv, pub = warp_generate_keypair()
-    now = _warp_dt.datetime.now(_warp_dt.timezone.utc)
-    tos = now.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (now.microsecond // 1000)
-    body = json.dumps({
-        "key": pub,
-        "install_id": "",
-        "fcm_token": "",
-        "warp_enabled": True,
-        "tos": tos,
-        "type": "Android",
-        "locale": "en_US",
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        WARP_API_URL,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": WARP_USER_AGENT},
-    )
-    ctx = ssl.create_default_context()
-
-    def _do_request(purl):
-        handlers = []
-        if purl:
-            handlers.append(urllib.request.ProxyHandler({"http": purl, "https": purl}))
-        handlers.append(urllib.request.HTTPSHandler(context=ctx))
-        opener = urllib.request.build_opener(*handlers)
-        with opener.open(req, timeout=timeout) as resp:
-            return resp.read(WARP_MAX_RESPONSE + 1)
-
-    raw = None
-    try:
-        raw = _do_request(proxy_url)
-    except ssl.SSLCertVerificationError:
-        raise
-    except Exception as exc:
-        if proxy_url:
-            try:
-                raw = _do_request(None)
-            except Exception:
-                pass
-        if raw is None:
-            reason = getattr(exc, "reason", None)
-            if isinstance(reason, ssl.SSLCertVerificationError):
-                raise reason
-            if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in str(exc):
-                raise WarpError("таймаут запроса к Cloudflare")
-            raise WarpError(str(reason or exc) or exc.__class__.__name__)
-
-    if len(raw) > WARP_MAX_RESPONSE:
-        raise WarpError("слишком большой ответ WARP")
-    parsed = _warp_parse_response(raw)
-    parsed["private_key"] = priv
-    return parsed
-
-
-def build_warp_conf(private_key, peer_public_key, endpoint, v4, v6, obfuscation=True):
-    """Render the .conf text. Reg id / token are not part of it."""
-    lines = [
-        "[Interface]",
-        "PrivateKey = %s" % private_key,
-        "Address = %s/32, %s/128" % (v4, v6),
-        "DNS = %s" % WARP_DNS,
-        "MTU = %d" % WARP_MTU,
-    ]
-    if obfuscation:
-        lines.extend("%s = %d" % item for item in WARP_OBFUSCATION)
-    lines += [
-        "",
-        "[Peer]",
-        "PublicKey = %s" % peer_public_key,
-        "AllowedIPs = 0.0.0.0/0, ::/0",
-        "Endpoint = %s" % endpoint,
-        "PersistentKeepalive = 25",
-        "",
-    ]
-    return "\n".join(lines)
-
-
-def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT, proxy_url=None):
-    """Register and return the finished .conf text."""
-    reg = register_warp(timeout=timeout, proxy_url=proxy_url)
-    target_endpoint = str(endpoint or "").strip() or reg.get("endpoint") or WARP_DEFAULT_ENDPOINT
-    return build_warp_conf(reg["private_key"], reg["public_key"], target_endpoint, reg["v4"], reg["v6"])
-
-
-__all__ = [name for name in globals() if not name.startswith("__")]
 def _argb(color, alpha=255):
     if isinstance(color, str):
         rgb = int(color.lstrip("#"), 16) & 0xFFFFFF
@@ -10866,6 +10631,31 @@ class SettingsUiMixin:
             refs = list(getattr(self, "_settings_view_click_refs", []) or [])
             refs.append(listener)
             self._settings_view_click_refs = refs[-16:]
+            return True
+        except:
+            return False
+
+    def _bind_view_long_click(self, view, callback):
+        if view is None or dynamic_proxy is None:
+            return False
+        try:
+            class _LongClick(dynamic_proxy(View.OnLongClickListener)):
+                def onLongClick(self, clicked_view):
+                    try:
+                        res = callback(clicked_view)
+                        return True if res is None else bool(res)
+                    except Exception as exc:
+                        try:
+                            BulletinHelper.show_error("Ошибка интерфейса: %s" % str(exc))
+                        except:
+                            pass
+                        return False
+
+            listener = _LongClick()
+            view.setOnLongClickListener(listener)
+            refs = list(getattr(self, "_settings_view_long_click_refs", []) or [])
+            refs.append(listener)
+            self._settings_view_long_click_refs = refs[-32:]
             return True
         except:
             return False
@@ -13331,13 +13121,116 @@ class SettingsUiMixin:
 
         return items
 
-    def _settings_mode_choices(self):
+    def _all_available_modes(self):
         return [
             (VLESS_KIND, self._settings_mode_title(VLESS_KIND)),
             (TGWS_KIND, "TG WS"),
             (AWG_KIND, "AmneziaWG"),
             (OLCRTC_KIND, "olcRTC"),
         ]
+
+    def _get_visible_modes(self):
+        val = self.get_setting("visible_modes", None)
+        if isinstance(val, list) and val:
+            valid = [m for m in val if m in (VLESS_KIND, TGWS_KIND, AWG_KIND, OLCRTC_KIND)]
+            if valid:
+                return valid
+        return [VLESS_KIND, TGWS_KIND, AWG_KIND, OLCRTC_KIND]
+
+    def _get_visible_modes_summary(self):
+        visible = self._get_visible_modes()
+        titles = [self._settings_mode_title(m) for m in visible]
+        return ", ".join(titles) if titles else "VLESS"
+
+    def _open_visible_modes_dialog(self):
+        activity = self._current_activity()
+        if activity is None:
+            return
+        all_modes = self._all_available_modes()
+        current_visible = set(self._get_visible_modes())
+
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Отображаемые режимы"))
+
+        items = [title for mode, title in all_modes]
+        checked = [mode in current_visible for mode, title in all_modes]
+        selected_mask = list(checked)
+
+        def _on_toggle(dlg, which, is_checked):
+            try:
+                selected_mask[int(which)] = bool(is_checked)
+            except:
+                pass
+
+        def _on_save(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            chosen = [all_modes[i][0] for i, on in enumerate(selected_mask) if on]
+            if not chosen:
+                BulletinHelper.show_error(Z("Должен быть выбран хотя бы один режим"))
+                return
+            self._set_setting_value("visible_modes", chosen, reload_settings=False)
+            try:
+                self.set_setting("visible_modes", chosen, reload_settings=False)
+            except:
+                pass
+            cur_mode = self._get_connection_mode()
+            if cur_mode not in chosen:
+                self._select_mode_from_settings(chosen[0])
+            else:
+                self._refresh_settings_without_reopen(reload_main=True, reload_stack=True)
+            BulletinHelper.show_success(Z("Режимы обновлены"))
+
+        builder.set_multi_choice_items(items, checked, _on_toggle)
+        builder.set_positive_button(Z("Сохранить"), _on_save)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+
+    def _open_quick_mode_switch_dialog(self, activity=None):
+        if activity is None:
+            activity = self._current_activity()
+        if activity is None:
+            return False
+        builder = AlertDialogBuilder(activity)
+        builder.set_title(Z("Режим подключения"))
+
+        choices = self._settings_mode_choices()
+        current = self._get_connection_mode()
+
+        items = []
+        modes = []
+        for mode, title in choices:
+            modes.append(mode)
+            mark = "● " if mode == current else "○ "
+            items.append(f"{mark}{title}")
+
+        def _on_choose(dlg, which):
+            try:
+                dlg.dismiss()
+            except:
+                pass
+            try:
+                idx = int(which)
+                if 0 <= idx < len(modes):
+                    target = modes[idx]
+                    if target != current:
+                        self._select_mode_from_settings(target)
+                        BulletinHelper.show_success(Z("Режим: %s") % self._settings_mode_title(target))
+            except Exception as exc:
+                BulletinHelper.show_error(Z("Ошибка: %s") % str(exc))
+
+        builder.set_items(items, _on_choose)
+        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
+        builder.show()
+        return True
+
+    def _settings_mode_choices(self):
+        visible = set(self._get_visible_modes())
+        all_choices = self._all_available_modes()
+        filtered = [c for c in all_choices if c[0] in visible]
+        return filtered if filtered else all_choices[:1]
 
     def _settings_mode_title(self, mode):
         target = str(mode or VLESS_KIND)
@@ -13883,68 +13776,12 @@ class SettingsUiMixin:
             ),
         ]
 
-    def _open_awg_source_picker_dialog(self):
-        activity = self._current_activity()
-        if activity is None:
-            self._download_free_awg_config()
-            return
-        current_src = self._awg_free_source()
-        builder = AlertDialogBuilder(activity)
-        builder.set_title(Z("Выбор источника AWG"))
-
-        items = []
-        for key in AWG_SOURCES_ORDER:
-            info = AWG_SOURCES_MAP.get(key, {})
-            title = Z(info.get("title", key))
-            desc = Z(info.get("desc", ""))
-            mark = "● " if key == current_src else "○ "
-            items.append(f"{mark}{title}\n{desc}")
-
-        def _on_choose(dlg, which):
-            try:
-                dlg.dismiss()
-            except:
-                pass
-            try:
-                idx = int(which)
-                if 0 <= idx < len(AWG_SOURCES_ORDER):
-                    chosen_source = AWG_SOURCES_ORDER[idx]
-                    self._set_setting_value("awg_free_source", chosen_source, reload_settings=False)
-                    self._download_free_awg_config(source=chosen_source)
-            except Exception as e:
-                BulletinHelper.show_error(Z("Ошибка выбора: %s") % str(e))
-
-        builder.set_items(items, _on_choose)
-        builder.set_negative_button(Z("Отмена"), lambda dlg, which: dlg.dismiss())
-        builder.show()
-
     def _build_awg_mode_items(self):
         runtime_state = self._settings_mode_runtime_state(AWG_KIND)
         running = runtime_state == "connected"
         conf_name = str(self._awg_conf_name or "").strip() or Z("Не выбран")
-        source_labels = [AWG_SOURCES_MAP[k]["title"] for k in AWG_SOURCES_ORDER]
         items = [
             Header(text="Конфигурация"),
-            Text(
-                text="Получить AWG конфиг",
-                subtext="Выбрать источник и загрузить конфиг",
-                icon="msg_download",
-                on_click=lambda *a: self._open_awg_source_picker_dialog(),
-            ),
-            Selector(
-                key="awg_free_source_idx",
-                text="Источник конфига",
-                default=self._sync_selector_index_setting("awg_free_source_idx", self._awg_free_source_index()),
-                items=source_labels,
-                icon="msg_list",
-                on_change=self._on_awg_free_source_changed,
-            ),
-            Text(
-                text="Обновить бесплатный конфиг",
-                subtext="Скачать новый конфиг для выбранного источника",
-                icon="msg_retry",
-                on_click=lambda *a: self._refresh_free_awg_config_from_settings(),
-            ),
             Text(
                 text="Выбрать .conf",
                 subtext=conf_name,
@@ -14044,61 +13881,19 @@ class SettingsUiMixin:
             return self._build_olcrtc_mode_items()
         return self._build_vless_mode_items()
 
-    def _create_all_modes_subpage(self):
-        items = [
-            Header(text=Z("Все режимы")),
-            Text(
-                text="AmneziaWG / WARP",
-                subtext=Z("Конфиг, источники, WARP Clean, .conf"),
-                icon="msg_secret",
-                create_sub_fragment=lambda: self._safe_settings_items(Z("AmneziaWG"), self._build_awg_mode_items),
-            ),
-            Text(
-                text="VLESS / Shadowsocks",
-                subtext=Z("Узлы, подписки, Reality"),
-                icon="msg_channel",
-                create_sub_fragment=lambda: self._safe_settings_items("VLESS", self._build_vless_mode_items),
-            ),
-            Text(
-                text="Telegram WebSocket",
-                subtext=Z("TG WS прокси и порты"),
-                icon="msg_link2",
-                create_sub_fragment=lambda: self._safe_settings_items("TG WS", self._build_tgws_mode_items),
-            ),
-            Text(
-                text="olcRTC",
-                subtext=Z("WebRTC профили, звонки"),
-                icon="msg_calls",
-                create_sub_fragment=lambda: self._safe_settings_items("olcRTC", self._build_olcrtc_mode_items),
-            ),
-        ]
-        return items
-
     def _create_active_mode_subpage(self):
         mode = self._get_connection_mode()
         title = self._settings_main_mode_title(mode)
-        items = []
-        items.extend(self._safe_settings_items(title, self._build_active_mode_items))
-        items.extend([
-            Divider(),
-            Header(text=Z("Другие режимы")),
-            Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_settings",
-                create_sub_fragment=self._create_all_modes_subpage,
-            ),
-        ])
-        return items
+        return self._safe_settings_items(title, self._build_active_mode_items)
 
     def _create_greenpass_extra_subpage(self):
         items = [
             Header(text=Z("Режимы и протоколы")),
             Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_folders",
-                create_sub_fragment=self._create_all_modes_subpage,
+                text=Z("Отображаемые режимы"),
+                subtext=self._get_visible_modes_summary(),
+                icon="msg_list",
+                on_click=lambda *a: self._open_visible_modes_dialog(),
             ),
             Divider(),
             Header(text="Сеть и автоматизация"),
@@ -15328,25 +15123,6 @@ class SettingsUiMixin:
             c_lp.topMargin = dp(8)
             container.addView(card, c_lp)
 
-        # Servers & Subscriptions Section
-        container.addView(self._create_ui_header(activity, "Серверы и подписки"), LinearLayout.LayoutParams(-1, -2))
-
-        all_modes_card = self._create_ui_action_card(
-            activity, "msg_folders", "Все серверы и конфиги",
-            "Настройка узлов AmneziaWG, VLESS, TG WS, olcRTC",
-            lambda: self._open_subpage_fragment(self._create_all_modes_subpage)
-        )
-        container.addView(all_modes_card, LinearLayout.LayoutParams(-1, -2))
-
-        awg_card = self._create_ui_action_card(
-            activity, "msg_download_settings", "Бесплатные серверы AWG",
-            "Скачивание готовых конфигураций AmneziaWG",
-            lambda: self._open_awg_source_picker_dialog()
-        )
-        awg_lp = LinearLayout.LayoutParams(-1, -2)
-        awg_lp.topMargin = dp(8)
-        container.addView(awg_card, awg_lp)
-
     def _fill_settings_tab(self, activity, container, state):
         dp = AndroidUtilities.dp
 
@@ -15568,12 +15344,6 @@ class SettingsUiMixin:
                 subtext=config_subtext,
                 icon="msg_folders",
                 create_sub_fragment=self._create_active_mode_subpage,
-            ))
-            settings.append(Text(
-                text=Z("Все режимы подключения"),
-                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
-                icon="msg_settings",
-                create_sub_fragment=self._create_all_modes_subpage,
             ))
 
             settings.append(Divider())
@@ -23242,61 +23012,10 @@ Java.perform(function () {
         except Exception:
             pass
 
-    def _awg_free_source(self):
-        try:
-            value = str(self.get_setting("awg_free_source", AWG_SOURCE_DEFAULT) or AWG_SOURCE_DEFAULT).strip().lower()
-        except Exception:
-            value = AWG_SOURCE_DEFAULT
-        return value if value in AWG_SOURCES_ORDER else AWG_SOURCE_DEFAULT
-
-    def _awg_free_source_index(self):
-        src = self._awg_free_source()
-        try:
-            return AWG_SOURCES_ORDER.index(src)
-        except Exception:
-            return 0
-
-    def _on_awg_free_source_changed(self, index):
-        try:
-            idx = int(index)
-            source = AWG_SOURCES_ORDER[idx] if 0 <= idx < len(AWG_SOURCES_ORDER) else AWG_SOURCE_DEFAULT
-        except Exception:
-            source = AWG_SOURCE_DEFAULT
-        try:
-            self._set_setting_value("awg_free_source", source, reload_settings=False)
-        except Exception:
-            try:
-                self.set_setting("awg_free_source", source, reload_settings=False)
-            except Exception:
-                pass
-        if bool(self._awg_conf_is_free):
-            self._refresh_free_awg_config_from_settings(source=source)
-        return True
-
-    def _awg_download_and_wait(self, source=None):
-        done = threading.Event()
-        result = [False]
-
-        def _cb(ok):
-            result[0] = bool(ok)
-            done.set()
-
-        self._download_free_awg_config(refreshed=True, on_done=_cb, source=source)
-        done.wait(30)
-        return result[0]
-
     def _awg_health_recover(self):
         self._awg_health_recovering = True
         try:
             now = time.time()
-            backoff = min(600.0 * (2 ** int(self._awg_refresh_failures or 0)), 3600.0)
-            if bool(self._awg_conf_is_free) and now - float(self._awg_last_refresh_ts or 0.0) >= backoff:
-                self._awg_last_refresh_ts = now
-                self._awg_refresh_failures = int(self._awg_refresh_failures or 0) + 1
-                self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
-                if not self._awg_download_and_wait():
-                    self._awg_reconnect_async()
-                return
             if int(self._awg_health_restarts or 0) < 1:
                 self._awg_health_restarts = 1
                 self._awg_disconnect(silent=True, reason="health_restart", stop_core=True)
@@ -23312,230 +23031,6 @@ Java.perform(function () {
         finally:
             self._awg_health_recovering = False
 
-    def _refresh_free_awg_config_from_settings(self, source=None):
-        def _work():
-            self._awg_health_recovering = True
-            try:
-                self._awg_last_refresh_ts = time.time()
-                self._awg_health_hold_until = 0.0
-                if self._awg_running or bool(getattr(self._awg_core, "started", False)):
-                    self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
-                use_source = source if source is not None else self._awg_free_source()
-                is_warp = str(use_source).startswith("warp")
-                source_title = AWG_SOURCES_MAP.get(use_source, {}).get("title", use_source)
-                if is_warp:
-                    msg = Z("Регистрирую %s…") % source_title
-                else:
-                    msg = Z("Скачиваю новый конфиг AWG...")
-                run_on_ui_thread(lambda msg=msg: BulletinHelper.show_info(msg))
-                if not self._awg_download_and_wait(source=use_source):
-                    self._awg_reconnect_async()
-            except Exception:
-                pass
-            finally:
-                self._awg_health_recovering = False
-
-        threading.Thread(target=_work, daemon=True).start()
-
-    def _download_free_awg_config(self, refreshed=False, on_done=None, source=None):
-        source = str(source or self._awg_free_source() or AWG_SOURCE_VPGRAM).strip().lower()
-        if source not in AWG_SOURCES_ORDER:
-            source = AWG_SOURCE_VPGRAM
-        is_warp = source.startswith("warp")
-
-        def _done(ok):
-            if on_done is not None:
-                try:
-                    on_done(bool(ok))
-                except Exception:
-                    pass
-
-        if bool(getattr(self, "_awg_config_downloading", False)):
-            _done(False)
-            return
-        self._awg_config_downloading = True
-        source_info = AWG_SOURCES_MAP.get(source, {})
-        source_title = source_info.get("title", source)
-        if not refreshed:
-            msg = Z("Регистрирую %s…") if is_warp else Z("Получаю конфиг: %s…")
-            BulletinHelper.show_info(msg % source_title)
-
-        def _check_udp_endpoint(conf_text, timeout=3.0):
-            """Return (host, port, reachable) from the first [Peer] Endpoint in the config."""
-            try:
-                for raw_line in conf_text.splitlines():
-                    line = raw_line.strip()
-                    if line.lower().startswith("endpoint"):
-                        val = line.split("=", 1)[1].strip()
-                        if val.startswith("[") and "]:" in val:
-                            h, pt = val[1:].rsplit("]:", 1)
-                        else:
-                            h, pt = val.rsplit(":", 1)
-                        p = int(pt)
-                        # UDP reachability: send empty packet, wait briefly for ICMP port-unreachable
-                        # or just confirm the socket can be created (route exists).
-                        # We try a quick connect-then-recv with SO_RCVTIMEO.
-                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        s.settimeout(timeout)
-                        try:
-                            s.connect((h, p))
-                            s.send(b"\x00")
-                            try:
-                                s.recv(1)
-                            except socket.timeout:
-                                # No ICMP rejection → likely reachable (or firewall drops silently)
-                                return h, p, True
-                            except OSError:
-                                # ICMP port-unreachable → host reachable, UDP port closed
-                                return h, p, True
-                        except OSError:
-                            # Connection refused / network unreachable
-                            return h, p, False
-                        finally:
-                            try:
-                                s.close()
-                            except Exception:
-                                pass
-            except Exception:
-                pass
-            return None, None, True  # Can't determine — assume ok
-
-        def _worker():
-            ok = False
-            try:
-                proxy_url = None
-                if bool(getattr(self, "_vless_running", False)):
-                    try:
-                        ep = self._greenpass_socks_endpoint()
-                    except Exception:
-                        ep = None
-                    if not ep:
-                        port = int(getattr(self, "_vless_port", 0) or 0)
-                        if port > 0:
-                            user = str(getattr(self, "_vless_socks_username", "") or "greenpass")
-                            pwd = str(getattr(self, "_vless_socks_password", "") or "")
-                            ep = {"host": "127.0.0.1", "port": port, "username": user, "password": pwd}
-                    if ep:
-                        import urllib.parse as _up
-                        h = str(ep.get("host", "127.0.0.1") or "127.0.0.1")
-                        p = int(ep.get("port", 0) or 0)
-                        u = str(ep.get("username", "") or "")
-                        pw = str(ep.get("password", "") or "")
-                        if p > 0:
-                            if u and pw:
-                                proxy_url = "http://%s:%s@%s:%d" % (
-                                    _up.quote(u, safe=""), _up.quote(pw, safe=""), h, p)
-                            else:
-                                proxy_url = "http://%s:%d" % (h, p)
-
-                if is_warp:
-                    cfg_info = AWG_SOURCES_MAP.get(source, {})
-                    filename = cfg_info.get("filename", WARP_CONF_NAME)
-                    ep = cfg_info.get("endpoint", WARP_DEFAULT_ENDPOINT)
-                    text = generate_warp_conf(endpoint=ep, proxy_url=proxy_url)
-                else:
-                    filename, text = self._fetch_vpgram_awg_config(proxy_url=proxy_url)
-
-                # Check if the peer endpoint is reachable via UDP before applying
-                ep_host, ep_port, ep_reachable = _check_udp_endpoint(text, timeout=3.0)
-                if not ep_reachable and ep_host:
-                    warn_msg = Z("AWG эндпоинт %s:%s недоступен — туннель не поднимется") % (ep_host, ep_port)
-                    run_on_ui_thread(lambda warn_msg=warn_msg: BulletinHelper.show_error(warn_msg))
-                    # Still save the config — user may want to keep it
-                    self._awg_conf_name = filename
-                    self._awg_conf_content = text
-                    self._awg_conf_is_free = True
-                    self._save_config()
-                    run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
-                    _done(False)
-                    return
-
-                # Endpoint is reachable — save config
-                self._awg_conf_name = filename
-                self._awg_conf_content = text
-                self._awg_conf_is_free = True
-                self._awg_health_restarts = 0
-                self._awg_health_hold_until = 0.0
-                self._save_config()
-
-                # If AWG is already actively connected, don't restart — just report config saved
-                awg_already_connected = (
-                    bool(getattr(self, "_awg_running", False))
-                    and bool(getattr(self, "_awg_socks_ready", False))
-                )
-                if self._is_awg_mode_selected():
-                    if awg_already_connected:
-                        # Конфиг сохранён; текущее подключение сохраняется.
-                        # Пользователь может вручную нажать "Переподключить AWG" для применения.
-                        saved_label = Z("Конфиг сохранён — нажмите ↺ для применения") if refreshed else Z("AWG конфиг получен — нажмите ↺")
-                        run_on_ui_thread(lambda saved_label=saved_label: BulletinHelper.show_success(saved_label))
-                    else:
-                        run_on_ui_thread(lambda: BulletinHelper.show_success(Z("Конфиг AWG обновлён") if refreshed else Z("AWG конфиг получен")))
-                        self._enable_plugin_proxy_flag()
-                        self._ensure_awg_core_then(self._awg_connect)
-                else:
-                    run_on_ui_thread(lambda: BulletinHelper.show_success(Z("Конфиг AWG обновлён") if refreshed else Z("AWG конфиг получен")))
-                run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
-                ok = True
-            except Exception as exc:
-                reason = getattr(exc, "reason", None)
-                if isinstance(exc, ssl.SSLCertVerificationError) or isinstance(reason, ssl.SSLCertVerificationError):
-                    cert_msg = "Не удалось проверить сертификат сервера WARP" if is_warp else "Не удалось проверить сертификат сервера AWG"
-                    run_on_ui_thread(lambda cert_msg=cert_msg: BulletinHelper.show_error(cert_msg))
-                else:
-                    err_text = str(exc)
-                    fail_fmt = "Не удалось зарегистрировать WARP: %s" if is_warp else "Не удалось получить AWG: %s"
-                    run_on_ui_thread(lambda err_text=err_text, fail_fmt=fail_fmt: BulletinHelper.show_error(fail_fmt % err_text))
-            finally:
-                self._awg_config_downloading = False
-                _done(ok)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _fetch_vpgram_awg_config(self, proxy_url=None):
-        device_seed = hashlib.sha1(("%s:%s" % (time.time(), random.random())).encode("utf-8")).hexdigest()[:16]
-        req = urllib.request.Request(
-            "https://web-api.vpgram.click/client-api/v1/download-anonymous-key",
-            headers={"X-Device-Id": device_seed},
-        )
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        def _do_fetch(purl):
-            handlers = []
-            if purl:
-                handlers.append(urllib.request.ProxyHandler({"http": purl, "https": purl}))
-            handlers.append(urllib.request.HTTPSHandler(context=ctx))
-            opener = urllib.request.build_opener(*handlers)
-            with opener.open(req, timeout=12) as resp:
-                return resp.read(256 * 1024), str(resp.headers.get("content-disposition", "") or "")
-
-        raw = None
-        cd = ""
-        try:
-            raw, cd = _do_fetch(proxy_url)
-        except Exception:
-            if proxy_url:
-                try:
-                    raw, cd = _do_fetch(None)
-                except Exception:
-                    pass
-            if raw is None:
-                raise
-
-        text = raw.decode("utf-8", errors="ignore")
-        filename = "VPgram_Free.conf"
-        try:
-            if "filename=" in cd:
-                name = cd.split("filename=", 1)[1].strip("\"' ")
-                if name:
-                    filename = name
-        except:
-            pass
-        if "[Interface]" not in text or "[Peer]" not in text:
-            raise Exception("ответ не похож на .conf")
-        return filename, text
 
     def _clear_awg_config(self):
         self._awg_disconnect_with_reason("clear_awg_config", silent=True)
@@ -24807,7 +24302,7 @@ Java.perform(function () {
                 n = ""
             if n == "org.telegram.ui.DialogsActivity":
                 if self._is_plugin_proxy_enabled():
-                    _force_show_dialogs_proxy_button(frag)
+                    _force_show_dialogs_proxy_button(frag, self)
                 else:
                     try:
                         if hasattr(frag, "updateProxyButton"):
