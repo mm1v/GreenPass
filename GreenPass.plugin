@@ -10447,8 +10447,7 @@ class SettingsUiMixin:
             chip_background.setColor(Theme.getColor(Theme.key_featuredStickers_addButton))
             chip_background.setCornerRadius(dp(12))
             mode_chip.setBackground(chip_background)
-            mode_chip.setClickable(True)
-            self._bind_view_click(mode_chip, lambda _view: self._open_core_quick_menu())
+            mode_chip.setClickable(False)
             top.addView(mode_chip, LinearLayout.LayoutParams(-2, -2))
             card.addView(top, LinearLayout.LayoutParams(-1, -2))
 
@@ -10542,130 +10541,152 @@ class SettingsUiMixin:
                 container.setOrientation(LinearLayout.VERTICAL)
                 container.setPadding(dp(16), dp(8), dp(16), dp(8))
 
-                cards_data = []
+                version_label = version if version else "2.6.1"
+                info_card = LinearLayout(activity)
+                info_card.setOrientation(LinearLayout.HORIZONTAL)
+                info_card.setGravity(Gravity.CENTER_VERTICAL)
+                info_card.setPadding(dp(14), dp(12), dp(14), dp(12))
 
-                def _build_choice_card(is_on, icon_name, title_text, desc_text):
-                    card = LinearLayout(activity)
-                    card.setOrientation(LinearLayout.HORIZONTAL)
-                    card.setGravity(Gravity.CENTER_VERTICAL)
-                    card.setPadding(dp(14), dp(12), dp(14), dp(12))
-                    card.setClickable(True)
-                    card.setFocusable(True)
+                info_bg = GradientDrawable()
+                info_bg.setCornerRadius(dp(14))
+                info_bg.setColor((0x15 << 24) | (accent & 0x00FFFFFF))
+                info_bg.setStroke(dp(1), (0x35 << 24) | (accent & 0x00FFFFFF))
+                info_card.setBackground(info_bg)
 
-                    card_bg = GradientDrawable()
-                    card_bg.setCornerRadius(dp(14))
-                    card.setBackground(card_bg)
-                    try:
-                        card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
-                    except:
-                        pass
+                info_icon_id = int(getattr(resource.drawable, "msg_info", 0)) if resource else 0
+                if info_icon_id:
+                    info_icon = ImageView(activity)
+                    info_icon.setImageResource(info_icon_id)
+                    info_icon.setColorFilter(accent)
+                    info_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                    info_lp.rightMargin = dp(14)
+                    info_card.addView(info_icon, info_lp)
 
-                    icon_id = int(getattr(resource.drawable, icon_name, 0)) if resource else 0
-                    icon_view = None
-                    if icon_id:
-                        icon_view = ImageView(activity)
-                        icon_view.setImageResource(icon_id)
-                        icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
-                        icon_lp.rightMargin = dp(14)
-                        card.addView(icon_view, icon_lp)
+                info_text_layout = LinearLayout(activity)
+                info_text_layout.setOrientation(LinearLayout.VERTICAL)
 
-                    text_layout = LinearLayout(activity)
-                    text_layout.setOrientation(LinearLayout.VERTICAL)
+                ver_title = TextView(activity)
+                ver_title.setText(f"GreenPass v{version_label}")
+                ver_title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                ver_title.setTextColor(title_color)
+                try:
+                    ver_title.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                except:
+                    pass
+                info_text_layout.addView(ver_title, LinearLayout.LayoutParams(-1, -2))
 
-                    title_view = TextView(activity)
-                    title_view.setText(Z(title_text))
-                    title_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
-                    try:
-                        title_view.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
-                    except:
-                        pass
-                    text_layout.addView(title_view, LinearLayout.LayoutParams(-1, -2))
+                ver_author = TextView(activity)
+                ver_author.setText(f"{Z('Автор')}: @mm1vs • exteraGram")
+                ver_author.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                ver_author.setTextColor(muted_color)
+                ver_author_lp = LinearLayout.LayoutParams(-1, -2)
+                ver_author_lp.topMargin = dp(2)
+                info_text_layout.addView(ver_author, ver_author_lp)
 
-                    desc_view = TextView(activity)
-                    desc_view.setText(Z(desc_text))
-                    desc_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
-                    desc_view.setTextColor(muted_color)
-                    desc_lp = LinearLayout.LayoutParams(-1, -2)
-                    desc_lp.topMargin = dp(2)
-                    text_layout.addView(desc_view, desc_lp)
+                info_card.addView(info_text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
 
-                    card.addView(text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
+                info_card_lp = LinearLayout.LayoutParams(-1, -2)
+                info_card_lp.topMargin = dp(2)
+                info_card_lp.bottomMargin = dp(4)
+                container.addView(info_card, info_card_lp)
 
-                    radio_view = TextView(activity)
-                    radio_lp = LinearLayout.LayoutParams(dp(22), dp(22))
-                    radio_lp.leftMargin = dp(12)
-                    radio_bg = GradientDrawable()
-                    radio_bg.setCornerRadius(dp(11))
-                    card.addView(radio_view, radio_lp)
+                auto_card = LinearLayout(activity)
+                auto_card.setOrientation(LinearLayout.HORIZONTAL)
+                auto_card.setGravity(Gravity.CENTER_VERTICAL)
+                auto_card.setPadding(dp(14), dp(12), dp(14), dp(12))
+                auto_card.setClickable(True)
+                auto_card.setFocusable(True)
 
-                    return {
-                        "is_on": is_on,
-                        "card": card,
-                        "card_bg": card_bg,
-                        "icon_view": icon_view,
-                        "title_view": title_view,
-                        "radio_view": radio_view,
-                        "radio_bg": radio_bg,
-                    }
+                auto_bg = GradientDrawable()
+                auto_bg.setCornerRadius(dp(14))
+                auto_card.setBackground(auto_bg)
+                try:
+                    auto_card.setForeground(Theme.createSelectorDrawable(Theme.getColor(Theme.key_listSelector), 2))
+                except:
+                    pass
 
-                card_on = _build_choice_card(True, "msg_retry", "Автообновление: Включено", "Проверять обновления плагина в фоне")
-                card_off = _build_choice_card(False, "msg_block", "Автообновление: Выключено", "Не проверять обновления автоматически")
-                cards_data.append(card_on)
-                cards_data.append(card_off)
+                auto_icon_id = int(getattr(resource.drawable, "msg_retry", 0)) if resource else 0
+                auto_icon_view = None
+                if auto_icon_id:
+                    auto_icon_view = ImageView(activity)
+                    auto_icon_view.setImageResource(auto_icon_id)
+                    auto_icon_lp = LinearLayout.LayoutParams(dp(24), dp(24))
+                    auto_icon_lp.rightMargin = dp(14)
+                    auto_card.addView(auto_icon_view, auto_icon_lp)
+
+                auto_text_layout = LinearLayout(activity)
+                auto_text_layout.setOrientation(LinearLayout.VERTICAL)
+
+                auto_title = TextView(activity)
+                auto_title.setText(Z("Автообновление"))
+                auto_title.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15)
+                try:
+                    auto_title.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                except:
+                    pass
+                auto_text_layout.addView(auto_title, LinearLayout.LayoutParams(-1, -2))
+
+                auto_desc = TextView(activity)
+                auto_desc.setText(Z("Проверять обновления плагина в фоне"))
+                auto_desc.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
+                auto_desc.setTextColor(muted_color)
+                auto_desc_lp = LinearLayout.LayoutParams(-1, -2)
+                auto_desc_lp.topMargin = dp(2)
+                auto_text_layout.addView(auto_desc, auto_desc_lp)
+
+                auto_card.addView(auto_text_layout, LinearLayout.LayoutParams(0, -2, 1.0))
+
+                check_box = TextView(activity)
+                check_box_lp = LinearLayout.LayoutParams(dp(22), dp(22))
+                check_box_lp.leftMargin = dp(12)
+                check_bg = GradientDrawable()
+                check_bg.setCornerRadius(dp(6))
+                check_box.setBackground(check_bg)
+                auto_card.addView(check_box, check_box_lp)
 
                 def _apply_visuals():
                     is_enabled = current_enabled[0]
-                    for item in cards_data:
-                        selected = (item["is_on"] == is_enabled)
-                        c_bg = item["card_bg"]
-                        t_v = item["title_view"]
-                        r_v = item["radio_view"]
-                        r_bg = item["radio_bg"]
-                        i_v = item["icon_view"]
+                    if is_enabled:
+                        accent_rgb = accent & 0x00FFFFFF
+                        auto_bg.setColor((0x18 << 24) | accent_rgb)
+                        auto_bg.setStroke(dp(1.5), accent)
+                        auto_title.setTextColor(accent)
+                        if auto_icon_view is not None:
+                            auto_icon_view.setColorFilter(accent)
+                        check_bg.setColor(accent)
+                        check_bg.setStroke(0, 0)
+                        check_box.setBackground(check_bg)
+                        check_box.setText("✓")
+                        check_box.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13)
+                        check_box.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
+                        check_box.setGravity(Gravity.CENTER)
+                        try:
+                            check_box.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                        except:
+                            pass
+                    else:
+                        auto_bg.setColor(surface_color)
+                        auto_bg.setStroke(dp(1), divider_color)
+                        auto_title.setTextColor(title_color)
+                        if auto_icon_view is not None:
+                            auto_icon_view.setColorFilter(muted_color)
+                        check_bg.setColor(0x00000000)
+                        check_bg.setStroke(dp(1.5), (0x66 << 24) | (muted_color & 0x00FFFFFF) if muted_color else 0x44888888)
+                        check_box.setBackground(check_bg)
+                        check_box.setText("")
 
-                        if selected:
-                            accent_rgb = accent & 0x00FFFFFF
-                            c_bg.setColor((0x20 << 24) | accent_rgb)
-                            c_bg.setStroke(dp(1.5), accent)
-                            t_v.setTextColor(accent)
-                            if i_v is not None:
-                                i_v.setColorFilter(accent)
-                            r_bg.setColor(accent)
-                            r_v.setBackground(r_bg)
-                            r_v.setText("✓")
-                            r_v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
-                            r_v.setTextColor(Theme.getColor(Theme.key_featuredStickers_buttonText))
-                            r_v.setGravity(Gravity.CENTER)
-                            try:
-                                r_v.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
-                            except:
-                                pass
-                        else:
-                            c_bg.setColor(surface_color)
-                            c_bg.setStroke(dp(1), divider_color)
-                            t_v.setTextColor(title_color)
-                            if i_v is not None:
-                                i_v.setColorFilter(muted_color)
-                            r_bg.setColor(0x00000000)
-                            r_bg.setStroke(dp(1.5), (0x55 << 24) | (muted_color & 0x00FFFFFF) if muted_color else 0x44888888)
-                            r_v.setBackground(r_bg)
-                            r_v.setText("")
+                def _toggle_auto(_view):
+                    current_enabled[0] = not current_enabled[0]
+                    self._set_plugin_autoupdate_enabled(current_enabled[0], notify=True)
+                    _apply_visuals()
+                    self._refresh_settings_without_reopen(reload_stack=True)
 
-                def _toggle_state(target_on):
-                    if current_enabled[0] != target_on:
-                        current_enabled[0] = target_on
-                        self._set_plugin_autoupdate_enabled(target_on, notify=True)
-                        _apply_visuals()
-                        self._refresh_settings_without_reopen(reload_stack=True)
+                self._bind_view_click(auto_card, _toggle_auto)
 
-                self._bind_view_click(card_on["card"], lambda _view: _toggle_state(True))
-                self._bind_view_click(card_off["card"], lambda _view: _toggle_state(False))
-
-                for item in cards_data:
-                    card_lp = LinearLayout.LayoutParams(-1, -2)
-                    card_lp.topMargin = dp(4)
-                    card_lp.bottomMargin = dp(4)
-                    container.addView(item["card"], card_lp)
+                auto_card_lp = LinearLayout.LayoutParams(-1, -2)
+                auto_card_lp.topMargin = dp(4)
+                auto_card_lp.bottomMargin = dp(4)
+                container.addView(auto_card, auto_card_lp)
 
                 action_card = LinearLayout(activity)
                 action_card.setOrientation(LinearLayout.HORIZONTAL)
@@ -10706,9 +10727,8 @@ class SettingsUiMixin:
                     pass
                 act_text_layout.addView(act_title_view, LinearLayout.LayoutParams(-1, -2))
 
-                version_label = version if version else "2.5.9"
                 act_desc_view = TextView(activity)
-                act_desc_view.setText(f"{Z('Текущая версия')}: {version_label} • {Z('Поиск новой версии')}")
+                act_desc_view.setText(Z("Поиск новой версии GreenPass"))
                 act_desc_view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 12)
                 act_desc_view.setTextColor(muted_color)
                 act_desc_lp = LinearLayout.LayoutParams(-1, -2)
@@ -10737,7 +10757,7 @@ class SettingsUiMixin:
                 self._bind_view_click(action_card, _on_action_click)
 
                 action_card_lp = LinearLayout.LayoutParams(-1, -2)
-                action_card_lp.topMargin = dp(10)
+                action_card_lp.topMargin = dp(4)
                 action_card_lp.bottomMargin = dp(4)
                 container.addView(action_card, action_card_lp)
 
@@ -10748,8 +10768,7 @@ class SettingsUiMixin:
                 builder.set_view(container)
             else:
                 options = [
-                    ("auto_on", "Автообновление: Включено", "Проверять обновления плагина в фоне"),
-                    ("auto_off", "Автообновление: Выключено", "Не проверять обновления автоматически"),
+                    ("toggle_auto", "Автообновление", "Проверять обновления плагина в фоне"),
                     ("check_now", "Проверить обновления", "Поиск новой версии GreenPass"),
                 ]
 
@@ -10761,23 +10780,17 @@ class SettingsUiMixin:
                     try:
                         idx = int(which)
                         action = options[idx][0]
-                        if action == "auto_on":
-                            if not current_enabled[0]:
-                                self._set_plugin_autoupdate_enabled(True, notify=True)
-                                self._refresh_settings_without_reopen(reload_stack=True)
-                        elif action == "auto_off":
-                            if current_enabled[0]:
-                                self._set_plugin_autoupdate_enabled(False, notify=True)
-                                self._refresh_settings_without_reopen(reload_stack=True)
+                        if action == "toggle_auto":
+                            self._set_plugin_autoupdate_enabled(not current_enabled[0], notify=True)
+                            self._refresh_settings_without_reopen(reload_stack=True)
                         elif action == "check_now":
                             self._check_plugin_update_now()
                     except:
                         pass
 
                 labels = [
-                    f"{'● ' if current_enabled[0] else '○ '}{Z(options[0][1])} — {Z(options[0][2])}",
-                    f"{'● ' if not current_enabled[0] else '○ '}{Z(options[1][1])} — {Z(options[1][2])}",
-                    f"🔄 {Z(options[2][1])} — {Z(options[2][2])}",
+                    f"{'☑ ' if current_enabled[0] else '☐ '}{Z(options[0][1])} — {Z(options[0][2])}",
+                    f"🔄 {Z(options[1][1])} — {Z(options[1][2])}",
                 ]
                 builder.set_items(labels, _choose)
 
@@ -12849,7 +12862,7 @@ class SettingsUiMixin:
     def _settings_mode_title(self, mode):
         target = str(mode or VLESS_KIND)
         if target == VLESS_KIND:
-            return "Mihomo" if self._effective_vless_engine() == VLESS_ENGINE_MIHOMO else "sing-box"
+            return "VLESS"
         if target == TGWS_KIND:
             return "TG WS"
         if target == AWG_KIND:
@@ -13661,8 +13674,7 @@ class SettingsUiMixin:
     def _settings_main_mode_title(self, mode=None):
         target = self._normalize_proxy_mode(mode or self._get_connection_mode())
         if target == VLESS_KIND:
-            engine = str(self.get_setting("vless_engine", "singbox") or "singbox").lower()
-            return f"VLESS ({'Mihomo' if engine == 'mihomo' else 'sing-box'})"
+            return "VLESS"
         return self._settings_mode_title(target)
 
     def _settings_main_mode_latency(self, mode=None):
@@ -13812,7 +13824,7 @@ class SettingsUiMixin:
 
             current_mode = self._get_connection_mode()
             modes_info = [
-                (VLESS_KIND, "VLESS", "Shadowsocks / VLESS через sing-box или Mihomo"),
+                (VLESS_KIND, "VLESS", "Shadowsocks / VLESS / Trojan"),
                 (TGWS_KIND, "TG WS", "Telegram WebSocket прокси"),
                 (AWG_KIND, "AmneziaWG", "Туннель Amnezia WireGuard"),
                 (OLCRTC_KIND, "olcRTC", "WebRTC прокси"),
@@ -14006,6 +14018,14 @@ class SettingsUiMixin:
                 subtext="Отключать прокси при активном VPN",
                 icon="msg_secret",
                 on_change=self._on_dont_use_with_vpn_changed,
+            ))
+            settings.append(Switch(
+                key="tgws_voip_relay_enabled",
+                text="Звонки через Relay",
+                default=bool(self._get_tgws_voip_relay_enabled()),
+                subtext="Обход блокировки голосовых звонков",
+                icon="msg_calls",
+                on_change=self._set_tgws_voip_relay_enabled,
             ))
 
             settings.append(Divider())
