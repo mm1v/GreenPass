@@ -7179,10 +7179,10 @@ Java.perform(function () {
 
     def _awg_free_source(self):
         try:
-            value = str(self.get_setting("awg_free_source", AWG_SOURCE_VPGRAM) or AWG_SOURCE_VPGRAM).strip().lower()
+            value = str(self.get_setting("awg_free_source", AWG_SOURCE_DEFAULT) or AWG_SOURCE_DEFAULT).strip().lower()
         except Exception:
-            value = AWG_SOURCE_VPGRAM
-        return value if value in AWG_SOURCES_ORDER else AWG_SOURCE_VPGRAM
+            value = AWG_SOURCE_DEFAULT
+        return value if value in AWG_SOURCES_ORDER else AWG_SOURCE_DEFAULT
 
     def _awg_free_source_index(self):
         src = self._awg_free_source()
@@ -7194,9 +7194,9 @@ Java.perform(function () {
     def _on_awg_free_source_changed(self, index):
         try:
             idx = int(index)
-            source = AWG_SOURCES_ORDER[idx] if 0 <= idx < len(AWG_SOURCES_ORDER) else AWG_SOURCE_VPGRAM
+            source = AWG_SOURCES_ORDER[idx] if 0 <= idx < len(AWG_SOURCES_ORDER) else AWG_SOURCE_DEFAULT
         except Exception:
-            source = AWG_SOURCE_VPGRAM
+            source = AWG_SOURCE_DEFAULT
         try:
             self._set_setting_value("awg_free_source", source, reload_settings=False)
         except Exception:
@@ -7295,6 +7295,46 @@ Java.perform(function () {
             msg = Z("Регистрирую %s…") if is_warp else Z("Получаю конфиг: %s…")
             BulletinHelper.show_info(msg % source_title)
 
+        def _check_udp_endpoint(conf_text, timeout=3.0):
+            """Return (host, port, reachable) from the first [Peer] Endpoint in the config."""
+            try:
+                for raw_line in conf_text.splitlines():
+                    line = raw_line.strip()
+                    if line.lower().startswith("endpoint"):
+                        val = line.split("=", 1)[1].strip()
+                        if val.startswith("[") and "]:" in val:
+                            h, pt = val[1:].rsplit("]:", 1)
+                        else:
+                            h, pt = val.rsplit(":", 1)
+                        p = int(pt)
+                        # UDP reachability: send empty packet, wait briefly for ICMP port-unreachable
+                        # or just confirm the socket can be created (route exists).
+                        # We try a quick connect-then-recv with SO_RCVTIMEO.
+                        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        s.settimeout(timeout)
+                        try:
+                            s.connect((h, p))
+                            s.send(b"\x00")
+                            try:
+                                s.recv(1)
+                            except socket.timeout:
+                                # No ICMP rejection → likely reachable (or firewall drops silently)
+                                return h, p, True
+                            except OSError:
+                                # ICMP port-unreachable → host reachable, UDP port closed
+                                return h, p, True
+                        except OSError:
+                            # Connection refused / network unreachable
+                            return h, p, False
+                        finally:
+                            try:
+                                s.close()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            return None, None, True  # Can't determine — assume ok
+
         def _worker():
             ok = False
             try:
@@ -7330,16 +7370,46 @@ Java.perform(function () {
                     text = generate_warp_conf(endpoint=ep, proxy_url=proxy_url)
                 else:
                     filename, text = self._fetch_vpgram_awg_config(proxy_url=proxy_url)
+
+                # Check if the peer endpoint is reachable via UDP before applying
+                ep_host, ep_port, ep_reachable = _check_udp_endpoint(text, timeout=3.0)
+                if not ep_reachable and ep_host:
+                    warn_msg = Z("AWG эндпоинт %s:%s недоступен — туннель не поднимется") % (ep_host, ep_port)
+                    run_on_ui_thread(lambda warn_msg=warn_msg: BulletinHelper.show_error(warn_msg))
+                    # Still save the config — user may want to keep it
+                    self._awg_conf_name = filename
+                    self._awg_conf_content = text
+                    self._awg_conf_is_free = True
+                    self._save_config()
+                    run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
+                    _done(False)
+                    return
+
+                # Endpoint is reachable — save config
                 self._awg_conf_name = filename
                 self._awg_conf_content = text
                 self._awg_conf_is_free = True
                 self._awg_health_restarts = 0
                 self._awg_health_hold_until = 0.0
                 self._save_config()
-                run_on_ui_thread(lambda: BulletinHelper.show_success("Конфиг AWG обновлён" if refreshed else "AWG конфиг получен"))
+
+                # If AWG is already actively connected, don't restart — just report config saved
+                awg_already_connected = (
+                    bool(getattr(self, "_awg_running", False))
+                    and bool(getattr(self, "_awg_socks_ready", False))
+                )
                 if self._is_awg_mode_selected():
-                    self._enable_plugin_proxy_flag()
-                    self._ensure_awg_core_then(self._awg_connect)
+                    if awg_already_connected:
+                        # Конфиг сохранён; текущее подключение сохраняется.
+                        # Пользователь может вручную нажать "Переподключить AWG" для применения.
+                        saved_label = Z("Конфиг сохранён — нажмите ↺ для применения") if refreshed else Z("AWG конфиг получен — нажмите ↺")
+                        run_on_ui_thread(lambda saved_label=saved_label: BulletinHelper.show_success(saved_label))
+                    else:
+                        run_on_ui_thread(lambda: BulletinHelper.show_success(Z("Конфиг AWG обновлён") if refreshed else Z("AWG конфиг получен")))
+                        self._enable_plugin_proxy_flag()
+                        self._ensure_awg_core_then(self._awg_connect)
+                else:
+                    run_on_ui_thread(lambda: BulletinHelper.show_success(Z("Конфиг AWG обновлён") if refreshed else Z("AWG конфиг получен")))
                 run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
                 ok = True
             except Exception as exc:

@@ -560,6 +560,11 @@ TRANSLATIONS_EN = {
     "Получаю конфиг: %s…": "Getting config: %s…",
     "Предыдущая страница": "Previous page",
     "Применить": "Apply",
+    "AWG конфиг получен — нажмите ↺": "AWG config saved — tap ↺ to apply",
+    "AWG эндпоинт %s:%s недоступен — туннель не поднимется": "AWG endpoint %s:%s unreachable — tunnel won't start",
+    "Конфиг AWG обновлён": "AWG config updated",
+    "Конфиг сохранён — нажмите ↺ для применения": "Config saved — tap ↺ to apply",
+
     "Приостановлен": "Paused",
     "Приостановлено: WIFI": "Paused: Wi-Fi",
     "Провайдер: %s": "Provider: %s",
@@ -1504,20 +1509,24 @@ AWG_SOURCE_WARP_854 = "warp_854"
 AWG_SOURCE_WARP_500 = "warp_500"
 AWG_SOURCE_WARP_880 = "warp_880"
 
+# Default source for free AWG config — WARP Clean Port 500 works in Russia
+AWG_SOURCE_DEFAULT = AWG_SOURCE_WARP_500
+
 AWG_SOURCES_ORDER = [
-    AWG_SOURCE_VPGRAM,
-    AWG_SOURCE_WARP_AUTO,
-    AWG_SOURCE_WARP_854,
     AWG_SOURCE_WARP_500,
+    AWG_SOURCE_WARP_854,
     AWG_SOURCE_WARP_880,
+    AWG_SOURCE_WARP_AUTO,
+    AWG_SOURCE_VPGRAM,
 ]
 
 AWG_SOURCES_MAP = {
     AWG_SOURCE_VPGRAM: {
         "title": "VPgram Free (AWG)",
-        "desc": "Анонимный ключ VPgram с обфускацией AWG",
-        "desc_en": "VPgram anonymous key with AWG obfuscation",
+        "desc": "⚠️ Заблокирован в РФ — эндпоинт 85.234.115.247:27947 недоступен",
+        "desc_en": "⚠️ Blocked in Russia — endpoint 85.234.115.247:27947 unreachable",
         "filename": "VPgram_Free.conf",
+        "blocked_in_ru": True,
     },
     AWG_SOURCE_WARP_AUTO: {
         "title": "Cloudflare WARP (Auto)",
@@ -1534,9 +1543,9 @@ AWG_SOURCES_MAP = {
         "filename": "WARP_Clean_854.conf",
     },
     AWG_SOURCE_WARP_500: {
-        "title": "WARP Clean (Port 500)",
-        "desc": "Системный порт 500 (162.159.192.9:500)",
-        "desc_en": "System port 500 (162.159.192.9:500)",
+        "title": "WARP Clean (Port 500) ✓",
+        "desc": "Рекомендуется: системный порт 500 (162.159.192.9:500)",
+        "desc_en": "Recommended: system port 500 (162.159.192.9:500)",
         "endpoint": "162.159.192.9:500",
         "filename": "WARP_Clean_500.conf",
     },
