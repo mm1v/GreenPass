@@ -518,6 +518,15 @@ TRANSLATIONS_EN = {
     "Запустить olcRTC": "Start olcRTC",
     "Профили и настройки": "Profiles and settings",
     "Скачать ядро": "Download core",
+    "Все режимы": "All modes",
+    "Все режимы подключения": "All connection modes",
+    "Настройка всех режимов": "Configure all modes",
+    "Настройка AmneziaWG, VLESS, TG WS, olcRTC": "Configure AmneziaWG, VLESS, TG WS, olcRTC",
+    "Конфиг, источники, WARP Clean, .conf": "Config, sources, WARP Clean, .conf",
+    "Узлы, подписки, Reality": "Nodes, subscriptions, Reality",
+    "TG WS прокси и порты": "TG WS proxy and ports",
+    "WebRTC профили, звонки": "WebRTC profiles, calls",
+    "Другие режимы": "Other modes",
     "Дополнительно": "Advanced",
     "Проксировать плагины": "Proxy plugins",
     "Направляет запросы плагинов через GreenPass": "Routes plugin requests through GreenPass",
@@ -13903,15 +13912,63 @@ class SettingsUiMixin:
             return self._build_olcrtc_mode_items()
         return self._build_vless_mode_items()
 
+    def _create_all_modes_subpage(self):
+        items = [
+            Header(text=Z("Все режимы")),
+            Text(
+                text="AmneziaWG / WARP",
+                subtext=Z("Конфиг, источники, WARP Clean, .conf"),
+                icon="msg_secret",
+                create_sub_fragment=lambda: self._safe_settings_items(Z("AmneziaWG"), self._build_awg_mode_items),
+            ),
+            Text(
+                text="VLESS / Shadowsocks",
+                subtext=Z("Узлы, подписки, Reality"),
+                icon="msg_channel",
+                create_sub_fragment=lambda: self._safe_settings_items("VLESS", self._build_vless_mode_items),
+            ),
+            Text(
+                text="Telegram WebSocket",
+                subtext=Z("TG WS прокси и порты"),
+                icon="msg_link2",
+                create_sub_fragment=lambda: self._safe_settings_items("TG WS", self._build_tgws_mode_items),
+            ),
+            Text(
+                text="olcRTC",
+                subtext=Z("WebRTC профили, звонки"),
+                icon="msg_calls",
+                create_sub_fragment=lambda: self._safe_settings_items("olcRTC", self._build_olcrtc_mode_items),
+            ),
+        ]
+        return items
+
     def _create_active_mode_subpage(self):
         mode = self._get_connection_mode()
         title = self._settings_main_mode_title(mode)
         items = []
         items.extend(self._safe_settings_items(title, self._build_active_mode_items))
+        items.extend([
+            Divider(),
+            Header(text=Z("Другие режимы")),
+            Text(
+                text=Z("Все режимы подключения"),
+                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
+                icon="msg_settings",
+                create_sub_fragment=self._create_all_modes_subpage,
+            ),
+        ])
         return items
 
     def _create_greenpass_extra_subpage(self):
         items = [
+            Header(text=Z("Режимы и протоколы")),
+            Text(
+                text=Z("Все режимы подключения"),
+                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
+                icon="msg_folders",
+                create_sub_fragment=self._create_all_modes_subpage,
+            ),
+            Divider(),
             Header(text="Сеть и автоматизация"),
             Switch(
                 key="proxy_plugins_via_greenpass",
@@ -14370,6 +14427,12 @@ class SettingsUiMixin:
                 subtext=config_subtext,
                 icon="msg_folders",
                 create_sub_fragment=self._create_active_mode_subpage,
+            ))
+            settings.append(Text(
+                text=Z("Все режимы подключения"),
+                subtext=Z("Настройка AmneziaWG, VLESS, TG WS, olcRTC"),
+                icon="msg_settings",
+                create_sub_fragment=self._create_all_modes_subpage,
             ))
 
             settings.append(Divider())
