@@ -2854,6 +2854,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         self._chat_menu_item_id = "greenpass_settings_open"
         self._drawer_menu_item_id = "greenpass_settings_drawer"
         self._proxy_button_hooks_installed = False
+        self._pill_stack_hooks_installed = False
         self._sync_hooks_installed = False
         self._proxy_killswitch_hook_installed = False
         self._awg_activity_hook_installed = False
@@ -3458,7 +3459,30 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 activity = AU.getActivity()
             except:
                 activity = None
+        if activity is None:
+            try:
+                LA = find_class("org.telegram.ui.LaunchActivity")
+                activity = getattr(LA, "instance", None)
+            except:
+                activity = None
         return activity
+
+    def _resolve_activity(self, view=None):
+        if view is not None:
+            try:
+                ctx = view.getContext() if hasattr(view, "getContext") else None
+                from android.app import Activity
+                from android.content import ContextWrapper
+                while ctx is not None:
+                    if isinstance(ctx, Activity):
+                        return ctx
+                    if isinstance(ctx, ContextWrapper):
+                        ctx = ctx.getBaseContext()
+                    else:
+                        break
+            except:
+                pass
+        return self._current_activity()
 
 
     def _read_greenpass_import_uri_bytes(self, uri):
@@ -5189,10 +5213,6 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 return True
         except:
             pass
-        if h in ("api.cloudflareclient.com", "web-api.vpgram.click"):
-            # Never route registration requests through a broken local tunnel
-            if not bool(getattr(self, "_vless_running", False)):
-                return True
         return False
 
     def _plugin_proxy_is_greenpass_call(self):
@@ -5210,6 +5230,8 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 target_root = os.path.dirname(target).rstrip("/") + "/"
             except:
                 target_root = ""
+        if not target and not target_name:
+            return False
 
         ignored = {
             "_plugin_proxy_is_greenpass_call",
@@ -5223,7 +5245,6 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         except:
             frame = None
 
-        vless_active = bool(getattr(self, "_vless_running", False))
         depth = 0
         while frame is not None and depth < 48:
             try:
@@ -5231,18 +5252,12 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 name = str(code.co_name or "")
                 filename = os.path.abspath(str(code.co_filename or "")).replace("\\", "/").lower()
                 filename_name = os.path.basename(filename)
-                f_locals = getattr(frame, "f_locals", None) or {}
-                if f_locals.get("self") is self or f_locals.get("plugin") is self:
-                    if not vless_active:
-                        return True
                 if name not in ignored and (
                     (target and filename == target)
                     or (target_root and filename.startswith(target_root))
                     or ((not target_root) and target_name and filename_name == target_name)
-                    or ("greenpass" in filename_name)
                 ):
-                    if not vless_active:
-                        return True
+                    return True
             except:
                 pass
             try:
@@ -7177,10 +7192,56 @@ Java.perform(function () {
         except Exception:
             pass
 
+    def _awg_free_source(self):
+        try:
+            value = str(self.get_setting("awg_free_source", "vpgram") or "vpgram").strip().lower()
+        except Exception:
+            value = "vpgram"
+        return value if value in ("vpgram", "warp") else "vpgram"
+
+    def _awg_free_source_index(self):
+        return 1 if self._awg_free_source() == "warp" else 0
+
+    def _on_awg_free_source_changed(self, index):
+        try:
+            source = "warp" if int(index) == 1 else "vpgram"
+        except Exception:
+            source = "vpgram"
+        try:
+            self._set_setting_value("awg_free_source", source, reload_settings=False)
+        except Exception:
+            try:
+                self.set_setting("awg_free_source", source, reload_settings=False)
+            except Exception:
+                pass
+        if bool(self._awg_conf_is_free):
+            self._refresh_free_awg_config_from_settings(source=source)
+        return True
+
+    def _awg_download_and_wait(self, source=None):
+        done = threading.Event()
+        result = [False]
+
+        def _cb(ok):
+            result[0] = bool(ok)
+            done.set()
+
+        self._download_free_awg_config(refreshed=True, on_done=_cb, source=source)
+        done.wait(30)
+        return result[0]
+
     def _awg_health_recover(self):
         self._awg_health_recovering = True
         try:
             now = time.time()
+            backoff = min(600.0 * (2 ** int(self._awg_refresh_failures or 0)), 3600.0)
+            if bool(self._awg_conf_is_free) and now - float(self._awg_last_refresh_ts or 0.0) >= backoff:
+                self._awg_last_refresh_ts = now
+                self._awg_refresh_failures = int(self._awg_refresh_failures or 0) + 1
+                self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
+                if not self._awg_download_and_wait():
+                    self._awg_reconnect_async()
+                return
             if int(self._awg_health_restarts or 0) < 1:
                 self._awg_health_restarts = 1
                 self._awg_disconnect(silent=True, reason="health_restart", stop_core=True)
@@ -7196,6 +7257,107 @@ Java.perform(function () {
         finally:
             self._awg_health_recovering = False
 
+    def _refresh_free_awg_config_from_settings(self, source=None):
+        def _work():
+            self._awg_health_recovering = True
+            try:
+                self._awg_last_refresh_ts = time.time()
+                self._awg_health_hold_until = 0.0
+                if self._awg_running or bool(getattr(self._awg_core, "started", False)):
+                    self._awg_disconnect(silent=True, reason="health_refresh", stop_core=True)
+                use_source = source if source is not None else self._awg_free_source()
+                if use_source == "warp":
+                    run_on_ui_thread(lambda: BulletinHelper.show_info("Регистрирую Cloudflare WARP..."))
+                else:
+                    run_on_ui_thread(lambda: BulletinHelper.show_info("Скачиваю новый конфиг AWG..."))
+                if not self._awg_download_and_wait(source=use_source):
+                    self._awg_reconnect_async()
+            except Exception:
+                pass
+            finally:
+                self._awg_health_recovering = False
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _download_free_awg_config(self, refreshed=False, on_done=None, source=None):
+        source = str(source or self._awg_free_source() or "vpgram").strip().lower()
+        if source not in ("vpgram", "warp"):
+            source = "vpgram"
+        is_warp = source == "warp"
+
+        def _done(ok):
+            if on_done is not None:
+                try:
+                    on_done(bool(ok))
+                except Exception:
+                    pass
+
+        if bool(getattr(self, "_awg_config_downloading", False)):
+            _done(False)
+            return
+        self._awg_config_downloading = True
+        if not refreshed:
+            BulletinHelper.show_info("Регистрирую Cloudflare WARP..." if is_warp else "Получаю AWG конфиг...")
+
+        def _worker():
+            ok = False
+            try:
+                if is_warp:
+                    filename = WARP_CONF_NAME
+                    text = generate_warp_conf()
+                else:
+                    filename, text = self._fetch_vpgram_awg_config()
+                self._awg_conf_name = filename
+                self._awg_conf_content = text
+                self._awg_conf_is_free = True
+                self._awg_health_restarts = 0
+                self._awg_health_hold_until = 0.0
+                self._save_config()
+                run_on_ui_thread(lambda: BulletinHelper.show_success("Конфиг AWG обновлён" if refreshed else "AWG конфиг получен"))
+                if self._is_awg_mode_selected():
+                    self._enable_plugin_proxy_flag()
+                    self._ensure_awg_core_then(self._awg_connect)
+                run_on_ui_thread(lambda: self._refresh_settings_without_reopen(reload_main=True))
+                ok = True
+            except Exception as exc:
+                reason = getattr(exc, "reason", None)
+                if isinstance(exc, ssl.SSLCertVerificationError) or isinstance(reason, ssl.SSLCertVerificationError):
+                    cert_msg = "Не удалось проверить сертификат сервера WARP" if is_warp else "Не удалось проверить сертификат сервера AWG"
+                    run_on_ui_thread(lambda cert_msg=cert_msg: BulletinHelper.show_error(cert_msg))
+                else:
+                    err_text = str(exc)
+                    fail_fmt = "Не удалось зарегистрировать WARP: %s" if is_warp else "Не удалось получить AWG: %s"
+                    run_on_ui_thread(lambda err_text=err_text, fail_fmt=fail_fmt: BulletinHelper.show_error(fail_fmt % err_text))
+            finally:
+                self._awg_config_downloading = False
+                _done(ok)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _fetch_vpgram_awg_config(self):
+        device_seed = hashlib.sha1(("%s:%s" % (time.time(), random.random())).encode("utf-8")).hexdigest()[:16]
+        req = urllib.request.Request(
+            "https://web-api.vpgram.click/client-api/v1/download-anonymous-key",
+            headers={"X-Device-Id": device_seed},
+        )
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            raw = resp.read(256 * 1024)
+            text = raw.decode("utf-8", errors="ignore")
+            filename = "VPgram_Free.conf"
+            try:
+                cd = str(resp.headers.get("content-disposition", "") or "")
+                if "filename=" in cd:
+                    name = cd.split("filename=", 1)[1].strip("\"' ")
+                    if name:
+                        filename = name
+            except:
+                pass
+        if "[Interface]" not in text or "[Peer]" not in text:
+            raise Exception("ответ не похож на .conf")
+        return filename, text
 
     def _clear_awg_config(self):
         self._awg_disconnect_with_reason("clear_awg_config", silent=True)
@@ -7853,25 +8015,47 @@ Java.perform(function () {
         except:
             pass
 
+    def _install_pill_stack_hooks(self):
+        if getattr(self, "_pill_stack_hooks_installed", False):
+            return
+        hook = _PillStackLongClickHook(self)
+        installed = False
+        try:
+            proxy_pill_cls = find_class("com.exteragram.messenger.pillstack.ui.pills.system.ProxyPill")
+            if proxy_pill_cls is not None:
+                self.hook_all_methods(proxy_pill_cls, "onPillLongClicked", hook)
+                installed = True
+        except:
+            pass
+        try:
+            base_pill_cls = find_class("com.exteragram.messenger.pillstack.ui.pills.BasePill")
+            if base_pill_cls is not None:
+                self.hook_all_methods(base_pill_cls, "onPillLongClicked", hook)
+                installed = True
+        except:
+            pass
+        if installed:
+            self._pill_stack_hooks_installed = True
+
     def _install_proxy_button_hooks(self):
         if self._proxy_button_hooks_installed:
             return
         try:
             DA = find_class("org.telegram.ui.DialogsActivity")
-            if not DA:
-                return
-            try:
-                self.hook_all_methods(DA, "updateProxyButton", _ForceDialogsProxyButtonHook(self))
-            except:
-                pass
-            try:
-                self.hook_all_methods(DA, "showSearch", _DialogsShowSearchForceProxyHook(self))
-            except:
-                pass
-            try:
-                self.hook_all_methods(DA, "showDoneItem", _DialogsShowDoneItemForceProxyHook(self))
-            except:
-                pass
+            if DA:
+                try:
+                    self.hook_all_methods(DA, "updateProxyButton", _ForceDialogsProxyButtonHook(self))
+                except:
+                    pass
+                try:
+                    self.hook_all_methods(DA, "showSearch", _DialogsShowSearchForceProxyHook(self))
+                except:
+                    pass
+                try:
+                    self.hook_all_methods(DA, "showDoneItem", _DialogsShowDoneItemForceProxyHook(self))
+                except:
+                    pass
+            self._install_pill_stack_hooks()
             self._proxy_button_hooks_installed = True
         except:
             pass

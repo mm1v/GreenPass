@@ -1,60 +1,5 @@
 # --- bundled from greenpass.hooks.py ---
 
-def _attach_pill_stack_listener(da, plugin):
-    if da is None or plugin is None:
-        return
-    try:
-        activity = da.getParentActivity()
-        if activity is None:
-            return
-
-        def _setup_view(view):
-            if view is None:
-                return
-            try:
-                if getattr(view, "_gp_quick_switch_attached", False):
-                    return
-                view._gp_quick_switch_attached = True
-                plugin._bind_view_long_click(view, lambda v, a=activity: plugin._open_quick_mode_switch_dialog(a))
-            except Exception:
-                pass
-
-        # 1. Search in known fields on DialogsActivity
-        cls = da.getClass()
-        for field_name in ("pillStack", "pillsStack", "floatingPill", "proxyPill", "pillView", "pillsContainer"):
-            try:
-                f = cls.getDeclaredField(field_name)
-                f.setAccessible(True)
-                val = f.get(da)
-                if val is not None:
-                    _setup_view(val)
-            except:
-                pass
-
-        # 2. Walk the fragmentView tree to find any Pill-like views in exteraGram
-        root = getattr(da, "fragmentView", None)
-        if root is not None:
-            queue = [root]
-            visited = 0
-            while queue and visited < 150:
-                cur = queue.pop(0)
-                visited += 1
-                try:
-                    cname = str(cur.getClass().getName() or "").lower()
-                    if "pill" in cname or "proxypill" in cname:
-                        _setup_view(cur)
-                    from android.view import ViewGroup
-                    if isinstance(cur, ViewGroup):
-                        for i in range(min(cur.getChildCount(), 20)):
-                            child = cur.getChildAt(i)
-                            if child is not None:
-                                queue.append(child)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-
 def _force_show_dialogs_proxy_button(da, plugin=None):
     try:
         if da is None:
@@ -81,19 +26,23 @@ def _force_show_dialogs_proxy_button(da, plugin=None):
                 proxy_item.setVisibility(View.VISIBLE)
             except:
                 pass
-
             if plugin is not None:
                 try:
-                    if not getattr(proxy_item, "_gp_quick_switch_attached", False):
-                        proxy_item._gp_quick_switch_attached = True
-                        act = da.getParentActivity()
-                        plugin._bind_view_long_click(proxy_item, lambda v, a=act: plugin._open_quick_mode_switch_dialog(a))
-                except Exception:
+                    if not getattr(proxy_item, "_gp_long_click_attached", False):
+                        setattr(proxy_item, "_gp_long_click_attached", True)
+                        if dynamic_proxy is not None:
+                            from android.view import View
+                            class _ProxyLongClickListener(dynamic_proxy(View.OnLongClickListener)):
+                                def onLongClick(self, v):
+                                    try:
+                                        act = plugin._resolve_activity(v)
+                                        run_on_ui_thread(lambda: plugin._open_mode_picker_dialog(activity=act))
+                                        return True
+                                    except:
+                                        return False
+                            proxy_item.setOnLongClickListener(_ProxyLongClickListener())
+                except:
                     pass
-
-        # Attach long-click listener to exteraGram's Pill Stack if present
-        if plugin is not None:
-            _attach_pill_stack_listener(da, plugin)
 
         if cls is not None:
             try:
@@ -227,6 +176,11 @@ class _ForceDialogsProxyButtonHook(MethodHook):
         try:
             if not self._plugin._active:
                 return
+            if not getattr(self._plugin, "_pill_stack_hooks_installed", False):
+                try:
+                    self._plugin._install_pill_stack_hooks()
+                except:
+                    pass
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
             _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
@@ -242,6 +196,11 @@ class _DialogsShowSearchForceProxyHook(MethodHook):
         try:
             if not self._plugin._active:
                 return
+            if not getattr(self._plugin, "_pill_stack_hooks_installed", False):
+                try:
+                    self._plugin._install_pill_stack_hooks()
+                except:
+                    pass
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
             _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
@@ -257,6 +216,11 @@ class _DialogsShowDoneItemForceProxyHook(MethodHook):
         try:
             if not self._plugin._active:
                 return
+            if not getattr(self._plugin, "_pill_stack_hooks_installed", False):
+                try:
+                    self._plugin._install_pill_stack_hooks()
+                except:
+                    pass
             if (not self._plugin._is_plugin_proxy_enabled()) or self._plugin._is_proxy_policy_suspended():
                 return
             _force_show_dialogs_proxy_button(param.thisObject, self._plugin)
@@ -594,6 +558,27 @@ class _Ipv6PolicyHook(MethodHook):
         try:
             if self._plugin._active and self._plugin._should_force_ipv4():
                 self._plugin._force_ipv4_strategy()
+        except:
+            pass
+
+
+class _PillStackLongClickHook(MethodHook):
+    def __init__(self, plugin):
+        self._plugin = plugin
+
+    def before_hooked_method(self, param):
+        try:
+            if not self._plugin._active:
+                return
+            act = self._plugin._resolve_activity(getattr(param, "thisObject", None))
+            run_on_ui_thread(lambda: self._plugin._open_mode_picker_dialog(activity=act))
+            try:
+                param.setResult(True)
+            except:
+                try:
+                    param.result = True
+                except:
+                    pass
         except:
             pass
 

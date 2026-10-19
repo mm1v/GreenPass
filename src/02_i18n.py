@@ -240,15 +240,6 @@ TRANSLATIONS_EN = {
     "Запустить olcRTC": "Start olcRTC",
     "Профили и настройки": "Profiles and settings",
     "Скачать ядро": "Download core",
-    "Все режимы": "All modes",
-    "Все режимы подключения": "All connection modes",
-    "Настройка всех режимов": "Configure all modes",
-    "Настройка AmneziaWG, VLESS, TG WS, olcRTC": "Configure AmneziaWG, VLESS, TG WS, olcRTC",
-    "Конфиг, источники, WARP Clean, .conf": "Config, sources, WARP Clean, .conf",
-    "Узлы, подписки, Reality": "Nodes, subscriptions, Reality",
-    "TG WS прокси и порты": "TG WS proxy and ports",
-    "WebRTC профили, звонки": "WebRTC profiles, calls",
-    "Другие режимы": "Other modes",
     "Дополнительно": "Advanced",
     "Проксировать плагины": "Proxy plugins",
     "Направляет запросы плагинов через GreenPass": "Routes plugin requests through GreenPass",
@@ -518,11 +509,6 @@ TRANSLATIONS_EN = {
     "Обновите ядро: проверка конфигурации недоступна": "Update core: config check unavailable",
     "Обновить бесплатный конфиг": "Refresh free config",
     "Обновление готово — перезапустите приложение. Настройки сохранены": "Update ready — restart the app. Settings saved",
-    "Отображаемые режимы": "Visible connection modes",
-    "Должен быть выбран хотя бы один режим": "At least one mode must be selected",
-    "Режимы обновлены": "Modes updated",
-    "Режим: %s": "Mode: %s",
-    "Сохранить": "Save",
     "Обновлять библиотеку в фоне": "Update library in background",
     "Обход блокировки голосовых звонков": "Bypass voice call blocking",
     "Отключать прокси при активном VPN": "Disable proxy when VPN is active",
@@ -565,11 +551,6 @@ TRANSLATIONS_EN = {
     "Получаю конфиг: %s…": "Getting config: %s…",
     "Предыдущая страница": "Previous page",
     "Применить": "Apply",
-    "AWG конфиг получен — нажмите ↺": "AWG config saved — tap ↺ to apply",
-    "AWG эндпоинт %s:%s недоступен — туннель не поднимется": "AWG endpoint %s:%s unreachable — tunnel won't start",
-    "Конфиг AWG обновлён": "AWG config updated",
-    "Конфиг сохранён — нажмите ↺ для применения": "Config saved — tap ↺ to apply",
-
     "Приостановлен": "Paused",
     "Приостановлено: WIFI": "Paused: Wi-Fi",
     "Провайдер: %s": "Provider: %s",
@@ -588,14 +569,14 @@ TRANSLATIONS_EN = {
     "Регистрирую Cloudflare WARP...": "Registering Cloudflare WARP...",
     "Регистрирую Cloudflare WARP…": "Registering Cloudflare WARP…",
     "Режим подключения": "Connection mode",
-    "Режим: %s\\nЯдро GreenPass: %s\\nАвтообновление: %s": "Mode: %s\\nGreenPass core: %s\\nAuto-update: %s",
+    "Режим: %s\nЯдро GreenPass: %s\nАвтообновление: %s": "Mode: %s\nGreenPass core: %s\nAuto-update: %s",
     "Свой узел": "Custom node",
     "Сгенерировать новый WARP": "Generate fresh WARP",
     "Сервер доступен • %d ms": "Server available • %d ms",
     "Сервер доступен • %s ms": "Server available • %s ms",
     "Сервер, порт и ключ шифрования": "Server, port and encryption key",
     "Сервер: %s": "Server: %s",
-    "Сервер: %s:%d\\nПинг: %s": "Server: %s:%d\\nPing: %s",
+    "Сервер: %s:%d\nПинг: %s": "Server: %s:%d\nPing: %s",
     "Серверов на странице": "Servers per page",
     "Серверы и конфиг": "Servers and config",
     "Сети, ядро, IPv6, перенос": "Networks, core, IPv6, migration",
@@ -1507,7 +1488,6 @@ OLCRTC_CARRIER_ITEMS = ("telemost", "jitsi", "wbstream")
 OLCRTC_TRANSPORT_ITEMS = ("datachannel", "vp8channel", "videochannel", "seichannel")
 OLCRTC_CARRIER_LABELS = ("Яндекс Телемост", "Jitsi Meet", "WB Stream")
 OLCRTC_TRANSPORT_LABELS = ("Data-канал", "VP8-канал", "Видео-канал", "SEI-канал")
-
 AWG_FILE_PICKER_REQ = 13371
 GREENPASS_IMPORT_FILE_PICKER_REQ = 13372
 GREENPASS_EXPORT_FILE_NAME = "export.greenpass"
