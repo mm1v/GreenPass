@@ -1849,6 +1849,9 @@ def _build_singbox_awg_config(conf_text, local_port):
     peer_domains = [ip for ip in peer_addresses if any(c.isalpha() for c in ip)]
     if peer_domains:
         route_rules.append({"domain": peer_domains, "outbound": "direct"})
+    has_ipv6 = any(":" in str(a) for a in addresses)
+    if not has_ipv6:
+        route_rules.append({"ip_cidr": ["::/0"], "action": "reject"})
 
     dns_list = [item.strip() for item in str(interface.get("dns", "") or "").split(",") if item.strip()]
     dns_servers = [
