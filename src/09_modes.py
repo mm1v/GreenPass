@@ -7300,9 +7300,28 @@ Java.perform(function () {
             try:
                 proxy_url = None
                 if self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False)):
-                    port = int(getattr(self, "_vless_port", 0) or 0)
-                    if port > 0:
-                        proxy_url = "http://127.0.0.1:%d" % port
+                    try:
+                        ep = self._greenpass_socks_endpoint()
+                    except Exception:
+                        ep = None
+                    if not ep:
+                        port = int(getattr(self, "_vless_port", 0) or 0)
+                        if port > 0:
+                            user = str(getattr(self, "_vless_socks_username", "") or "greenpass")
+                            pwd = str(getattr(self, "_vless_socks_password", "") or "")
+                            ep = {"host": "127.0.0.1", "port": port, "username": user, "password": pwd}
+                    if ep:
+                        import urllib.parse as _up
+                        h = str(ep.get("host", "127.0.0.1") or "127.0.0.1")
+                        p = int(ep.get("port", 0) or 0)
+                        u = str(ep.get("username", "") or "")
+                        pw = str(ep.get("password", "") or "")
+                        if p > 0:
+                            if u and pw:
+                                proxy_url = "http://%s:%s@%s:%d" % (
+                                    _up.quote(u, safe=""), _up.quote(pw, safe=""), h, p)
+                            else:
+                                proxy_url = "http://%s:%d" % (h, p)
 
                 if is_warp:
                     cfg_info = AWG_SOURCES_MAP.get(source, {})
