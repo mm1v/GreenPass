@@ -5189,6 +5189,10 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 return True
         except:
             pass
+        if h in ("api.cloudflareclient.com", "web-api.vpgram.click"):
+            # Never route registration requests through a broken local tunnel
+            if not (self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False))):
+                return True
         return False
 
     def _plugin_proxy_is_greenpass_call(self):
@@ -5206,8 +5210,6 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 target_root = os.path.dirname(target).rstrip("/") + "/"
             except:
                 target_root = ""
-        if not target and not target_name:
-            return False
 
         ignored = {
             "_plugin_proxy_is_greenpass_call",
@@ -5221,6 +5223,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         except:
             frame = None
 
+        vless_active = bool(self._is_vless_mode_selected() and getattr(self, "_vless_running", False))
         depth = 0
         while frame is not None and depth < 48:
             try:
@@ -5228,12 +5231,18 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
                 name = str(code.co_name or "")
                 filename = os.path.abspath(str(code.co_filename or "")).replace("\\", "/").lower()
                 filename_name = os.path.basename(filename)
+                f_locals = getattr(frame, "f_locals", None) or {}
+                if f_locals.get("self") is self or f_locals.get("plugin") is self:
+                    if not vless_active:
+                        return True
                 if name not in ignored and (
                     (target and filename == target)
                     or (target_root and filename.startswith(target_root))
                     or ((not target_root) and target_name and filename_name == target_name)
+                    or ("greenpass" in filename_name)
                 ):
-                    return True
+                    if not vless_active:
+                        return True
             except:
                 pass
             try:
