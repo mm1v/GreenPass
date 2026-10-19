@@ -5191,7 +5191,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
             pass
         if h in ("api.cloudflareclient.com", "web-api.vpgram.click"):
             # Never route registration requests through a broken local tunnel
-            if not (self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False))):
+            if not bool(getattr(self, "_vless_running", False)):
                 return True
         return False
 
@@ -5223,7 +5223,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         except:
             frame = None
 
-        vless_active = bool(self._is_vless_mode_selected() and getattr(self, "_vless_running", False))
+        vless_active = bool(getattr(self, "_vless_running", False))
         depth = 0
         while frame is not None and depth < 48:
             try:
@@ -7299,7 +7299,7 @@ Java.perform(function () {
             ok = False
             try:
                 proxy_url = None
-                if self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False)):
+                if bool(getattr(self, "_vless_running", False)):
                     try:
                         ep = self._greenpass_socks_endpoint()
                     except Exception:

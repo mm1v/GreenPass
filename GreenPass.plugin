@@ -10698,7 +10698,113 @@ def generate_warp_conf(endpoint=None, timeout=WARP_TIMEOUT, proxy_url=None):
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]
-# --- bundled from greenpass.ui.py ---
+def _argb(color, alpha=255):
+    if isinstance(color, str):
+        rgb = int(color.lstrip("#"), 16) & 0xFFFFFF
+    else:
+        rgb = int(color) & 0xFFFFFF
+    value = ((int(alpha) & 0xFF) << 24) | rgb
+    return value - (1 << 32) if value >= (1 << 31) else value
+
+
+def _blend(base, over, amount):
+    a = _argb(base) & 0xFFFFFF
+    b = _argb(over) & 0xFFFFFF
+    parts = []
+    for shift in (16, 8, 0):
+        x, y = (a >> shift) & 255, (b >> shift) & 255
+        parts.append(int(x + (y - x) * amount))
+    return _argb((parts[0] << 16) | (parts[1] << 8) | parts[2])
+
+
+def _ji(value):
+    try:
+        from java import jint
+        return jint(int(value))
+    except Exception:
+        return int(value)
+
+
+class _GlassDraw:
+    def __init__(self, width, height, density, text, muted, accent=None):
+        from android.graphics import Bitmap, Canvas, Paint
+        self.w = int(width)
+        self.h = int(height)
+        self.density = float(density)
+        self.bmp = Bitmap.createBitmap(self.w, self.h, Bitmap.Config.ARGB_8888)
+        self.cv = Canvas(self.bmp)
+        self.paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        self.text_color = text
+        self.muted_color = muted
+        self.accent = _argb(accent if accent is not None else -16744193)
+
+    def dp(self, value):
+        return value * self.density
+
+    def rgba(self, color, alpha=255):
+        return _argb(color, alpha)
+
+    def line(self, x1, y1, x2, y2, color, width=1.0, alpha=255):
+        from android.graphics import Paint
+        self.paint.setStyle(Paint.Style.STROKE)
+        self.paint.setStrokeWidth(float(width))
+        self.paint.setColor(_ji(self.rgba(color, alpha)))
+        self.cv.drawLine(float(x1), float(y1), float(x2), float(y2), self.paint)
+
+    def rrect(self, l, t, r, b, rad, color, alpha=255):
+        from android.graphics import Paint, RectF
+        self.paint.setStyle(Paint.Style.FILL)
+        self.paint.setColor(_ji(self.rgba(color, alpha)))
+        self.cv.drawRoundRect(RectF(float(l), float(t), float(r), float(b)), float(rad), float(rad), self.paint)
+
+    def stroke_rrect(self, l, t, r, b, rad, color, stroke=1.0, alpha=255):
+        from android.graphics import Paint, RectF
+        self.paint.setStyle(Paint.Style.STROKE)
+        self.paint.setStrokeWidth(float(stroke))
+        self.paint.setColor(_ji(self.rgba(color, alpha)))
+        self.cv.drawRoundRect(RectF(float(l), float(t), float(r), float(b)), float(rad), float(rad), self.paint)
+
+    def circle(self, cx, cy, rad, color, alpha=255):
+        from android.graphics import Paint
+        self.paint.setStyle(Paint.Style.FILL)
+        self.paint.setColor(_ji(self.rgba(color, alpha)))
+        self.cv.drawCircle(float(cx), float(cy), float(rad), self.paint)
+
+    def arc(self, cx, cy, rad, start, sweep, color, stroke=1.0):
+        from android.graphics import Paint, RectF
+        self.paint.setStyle(Paint.Style.STROKE)
+        self.paint.setStrokeWidth(float(stroke))
+        self.paint.setColor(_ji(self.rgba(color, 255)))
+        self.paint.setStrokeCap(Paint.Cap.ROUND)
+        self.cv.drawArc(RectF(cx - rad, cy - rad, cx + rad, cy + rad), float(start), float(sweep), False, self.paint)
+
+
+def _draw_glass_icon(d, kind, color, alpha=255):
+    import math
+    size = float(d.w)
+    stroke = d.dp(2)
+    if kind in ("overview", "connect", "connection"):
+        cx, cy = size / 2.0, size / 2.0
+        r = size * 0.16
+        d.circle(cx - size * 0.22, cy, r, color, alpha)
+        d.circle(cx + size * 0.22, cy, r, color, alpha)
+        d.line(cx - size * 0.22, cy, cx + size * 0.22, cy, color, stroke * 1.5, alpha)
+    elif kind in ("chats", "servers", "modes"):
+        h = size * 0.16
+        w = size * 0.65
+        l = (size - w) / 2.0
+        for top in (size * 0.18, size * 0.42, size * 0.66):
+            d.stroke_rrect(l, top, l + w, top + h, h / 2.0, color, stroke, alpha)
+            d.circle(l + w * 0.22, top + h / 2.0, size * 0.04, color, alpha)
+    else:
+        cx = cy = size / 2.0
+        d.arc(cx, cy, size * 0.27, 0, 359.9, color, stroke)
+        d.circle(cx, cy, size * 0.09, color, alpha)
+        for i in range(8):
+            angle = math.radians(45 * i)
+            d.line(cx + math.cos(angle) * size * 0.33, cy + math.sin(angle) * size * 0.33,
+                   cx + math.cos(angle) * size * 0.43, cy + math.sin(angle) * size * 0.43,
+                   color, stroke * 1.4, alpha)
 
 
 class SettingsUiMixin:
@@ -21141,7 +21247,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
             pass
         if h in ("api.cloudflareclient.com", "web-api.vpgram.click"):
             # Never route registration requests through a broken local tunnel
-            if not (self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False))):
+            if not bool(getattr(self, "_vless_running", False)):
                 return True
         return False
 
@@ -21173,7 +21279,7 @@ class SafeBypassPlugin(SettingsUiMixin, SingBoxModeMixin, AwgModeMixin, OlcRtcMo
         except:
             frame = None
 
-        vless_active = bool(self._is_vless_mode_selected() and getattr(self, "_vless_running", False))
+        vless_active = bool(getattr(self, "_vless_running", False))
         depth = 0
         while frame is not None and depth < 48:
             try:
@@ -23249,7 +23355,7 @@ Java.perform(function () {
             ok = False
             try:
                 proxy_url = None
-                if self._is_vless_mode_selected() and bool(getattr(self, "_vless_running", False)):
+                if bool(getattr(self, "_vless_running", False)):
                     try:
                         ep = self._greenpass_socks_endpoint()
                     except Exception:
